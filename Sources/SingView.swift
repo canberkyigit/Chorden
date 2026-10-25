@@ -56,6 +56,9 @@ struct SingView: View {
                         .foregroundStyle(Theme.dim)
                 }
                 Spacer()
+                if !model.recording && model.countIn == nil {
+                    SavedTakesMenu()
+                }
                 if !model.slots.isEmpty && !model.recording {
                     Button { model.play() } label: {
                         Image(systemName: model.playing == nil ? "play.fill" : "stop.fill")
@@ -243,6 +246,9 @@ private struct TakeBar: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
+                let kept = model.takeID != nil && !model.changed
+                action(kept ? "bookmark.fill" : "bookmark", kept ? tr("Saved") : tr("Save")) { model.saveTake() }
+                    .help(tr("Keep this take with your voice and chosen chords; reopen it from My takes"))
                 action("repeat", tr("Loop it")) { model.sendToProgressions() }
                     .help(tr("Loop these chords in Progressions with a rhythm and drums"))
                 action(copied ? "checkmark" : "doc.on.doc", tr("Copy")) {
@@ -260,11 +266,11 @@ private struct TakeBar: View {
     }
 
     private var divider: some View {
-        Rectangle().fill(Theme.line).frame(width: 1, height: 14).padding(.horizontal, 6)
+        Rectangle().fill(Theme.line).frame(width: 1, height: 14).padding(.horizontal, 3)
     }
 
     private func label(_ s: String) -> some View {
-        Text(tr(s)).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim)
+        Text(tr(s)).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim).fixedSize()
     }
 
     private func exportMIDI() {

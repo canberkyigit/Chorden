@@ -98,6 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
         ProgressionPlayer.shared.stop()
         MetronomeModel.shared.stop()
         SingModel.shared.stop()
+        EarQuizModel.shared.stop()
         DispatchQueue.main.async { self.updateListening() }
     }
 
@@ -243,6 +244,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
             }
             return true
         }
+        if key === window && state.tab == .earquiz {
+            // EarQuiz: Space plays the question again, 1–9, 0, − and = answer, Return / → next, Esc ends choosing.
+            let quiz = EarQuizModel.shared
+            switch e.keyCode {
+            case 49: quiz.space()
+            case 36, 76, 124: quiz.advance()
+            case 53:
+                guard quiz.editing else { return false }
+                quiz.editing = false
+            default:
+                guard let c = e.charactersIgnoringModifiers?.first, let i = EarQuizModel.keys.firstIndex(of: c) else { return false }
+                quiz.answer(index: i)
+            }
+            return true
+        }
         if key === window && state.tab == .metronome {
             let metronome = MetronomeModel.shared
             let step: Double = e.modifierFlags.contains(.shift) ? 10 : 1
@@ -308,6 +324,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSW
     @objc func showSing(_ sender: Any?) {
         showWindow()
         state.tab = .sing
+    }
+
+    @objc func showEarQuiz(_ sender: Any?) {
+        showWindow()
+        state.tab = .earquiz
     }
 
     @objc func toggleMetronome(_ sender: Any?) { MetronomeModel.shared.toggle() }

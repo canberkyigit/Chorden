@@ -4,6 +4,7 @@ struct ProgressionsView: View {
     @ObservedObject var prefs = Prefs.shared
     @ObservedObject var player = ProgressionPlayer.shared
     @ObservedObject var app = AppState.shared
+    @ObservedObject var library = Library.shared
 
     var body: some View {
         let instrument = prefs.instrument
@@ -12,6 +13,8 @@ struct ProgressionsView: View {
             HStack {
                 InstrumentPicker(allowModes: false, onlyRecorded: true)
                 Spacer()
+                SavedProgressionsMenu()
+                    .padding(.trailing, -8)
             }
             .padding(.top, 6)
 
@@ -51,6 +54,7 @@ struct ProgressionsView: View {
                     }
                     .buttonStyle(.plain)
                     .help(tr("Play / stop the loop (Space)"))
+                    saveButton(p)
                     Button { player.generate() } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "dice").font(.system(size: 12))
@@ -114,6 +118,21 @@ struct ProgressionsView: View {
 }
 
 extension ProgressionsView {
+    /// Keeps the progression with its tempo and rhythm; filled once it's kept as it is now.
+    func saveButton(_ p: Progression) -> some View {
+        let kept = library.saved(p).map { $0.sameSettings(prefs) } ?? false
+        return Button { library.save(p) } label: {
+            Image(systemName: kept ? "bookmark.fill" : "bookmark")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.text)
+                .frame(width: 34, height: 34)
+                .background(Theme.line.opacity(0.6), in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(kept ? tr("Saved") : tr("Save this progression with its tempo and rhythm"))
+    }
+
     @ViewBuilder
     func card(_ p: Progression, _ i: Int, instrument: Instrument, tuning: Tuning) -> some View {
         let root = p.root(i)

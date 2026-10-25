@@ -57,7 +57,7 @@ Requires macOS 13 or later and the Xcode Command Line Tools.
 - **All strings**: strum once and see every string's deviation at the same time. Harmonics that two strings share (E2 ×3 = B3) are ignored, so each string is read from its own sound.
 - **Intonation**: for each string, play it open, then at the 12th fret. Chorden tells you how far off the octave is and which way to move the saddle.
 - **Chord recognition** (Chords → Listen): play a chord and the library follows it, including sus chords and slash chords such as C/G.
-- **Progressions** (its own tab): 2 to 12 chords from proven patterns in 20 moods (happy, melancholic, epic, cinematic, dreamy, lo-fi, jazz, bossa, blues, soul, gospel, rock, country, reggae, anime, oriental, arabesk…) in a random key, or your own: click a chord's name to swap it for any chord in the key (or any root and quality), **+** adds a chord that fits, **×** removes one, all while the loop keeps playing. ▶ loops them with one of 14 rhythms (strums, funk scratch, reggae skank, palm-mute chug, gallop, Travis picking, bossa nova…) and one of 13 drum grooves (rock, ballad, four on the floor, funk, blues shuffle, jazz swing, bossa, one drop, boom bap, half-time…), swing, and a chord length of ½, 1 or 2 bars. Events are scheduled on the audio clock, so the loop never drifts. Click a card to hear one chord, or double-click to open it in the library.
+- **Progressions** (its own tab): 2 to 12 chords from proven patterns in 20 moods (happy, melancholic, epic, cinematic, dreamy, lo-fi, jazz, bossa, blues, soul, gospel, rock, country, reggae, anime, oriental, arabesk…) in a random key, or your own: click a chord's name to swap it for any chord in the key (or any root and quality), **+** adds a chord that fits, **×** removes one, all while the loop keeps playing. Save a progression with its loop settings (bookmark button) and reopen it from **My progressions**. ▶ loops them with one of 14 rhythms (strums, funk scratch, reggae skank, palm-mute chug, gallop, Travis picking, bossa nova…) and one of 13 drum grooves on a recorded drum kit (soft and hard hits, hi-hat choke) (rock, ballad, four on the floor, funk, blues shuffle, jazz swing, bossa, one drop, boom bap, half-time…), swing, and a chord length of ½, 1 or 2 bars. Events are scheduled on the audio clock, so the loop never drifts. Click a card to hear one chord, or double-click to open it in the library.
 - **Scales**: 66 scales (modes, jazz and bebop, pentatonics and blues, Japanese/Chinese/Javanese, Indian ragas, exotic minors, symmetric, Arabic maqamat in quarter tones) plus 17 Turkish makams. You can view the whole neck (or keyboard) or one position box at a time. ▶ plays the scale with its true microtones and lights each note as it sounds.
 - **Custom tunings and favorites**: the slider icon next to the tuning menu edits each string and saves the result under My Tunings. Star a tuning to pin it at the top, or star a chord to add it to the favorites row.
 - **Metronome**: tap tempo, 2/4 to 7/8, subdivisions, and an accented downbeat. The sounds are real recordings (classic click and bell, wood block, cowbell, hi-hat) plus a clean beep, loudness-matched. Clicks are scheduled inside the audio engine, so they never drift.
@@ -76,11 +76,24 @@ Press the mic and sing or hum a melody. Chord suggestions appear as you sing.
 - **Click**: sing with the metronome for a one-bar count-in and bars that follow its tempo.
 - **Afterwards**: ▶ plays the chords with your recorded voice (**V** toggles it, also mid-playback) and the melody on your instrument (**M**). Transpose, see a capo suggestion for guitar, loop the chords in Progressions, copy a chord chart, or save a MIDI file whose tempo map follows your singing.
 
+## EarQuiz
+
+Ear training in its own tab (⌘7):
+
+- **Intervals** (up, down or together), **Chords** (16 types, together or broken), **Scales & Makams** (12 Western scales and modes plus Rast, Uşşak, Hüseyni, Hicaz, Kürdî, Nihavend, Saba, Karcığar, Hicazkâr and Suzinak at their true 53-koma pitches) and **Notes**.
+- Ready-made sets from beginner to all, or a custom set of answers.
+- Space plays and replays, 1–9 answer, Return moves on. A wrong answer shows the right one with its spelled notes, and any answer can be played for comparison.
+- Streaks, session accuracy and per-item accuracy are kept; questions you miss come up more often.
+
+## Saving
+
+Progressions and Sing & Find takes (with the recorded voice, chords you picked, tempo and key) are saved in `~/Library/Application Support/Chorden/` and reopen from the **My progressions** and **My takes** menus. Rows can be renamed and deleted.
+
 ## Sound
 
 The acoustic guitar is recorded in full: every note from low E to the 24th fret, each played both hard and soft, so nothing is pitch-shifted and gentle strums really sound gentle. Guitars (classical, electric), bass, violin, viola, cello, double bass, banjo and piano play **real recordings**: 163 notes rendered from the MIT-licensed MuseScore General SoundFont (FluidR3 by Frank Wen, FluidR3Mono by Michael Cowgill, MuseScore General by S. Christian Collins; see `Resources/Samples/LICENSE.md`). Each recording's pitch was measured and corrected, so they play in tune to within ~2 cents. Notes between the recorded ones are pitch-shifted with cubic interpolation.
 
-Ukulele, mandolin, bouzouki, balalaika, cavaquinho, bağlama and oud have no free, openly licensed recordings in that set, so they use the physical models described below.
+Bağlama (fcerim's CC0 "Baglama Notes" on Freesound) and ukulele (FreePats, CC0) also play real recordings. The oud has no openly licensed single-note recordings, so its physical model was fitted against real oud notes instead. Mandolin, bouzouki, balalaika and cavaquinho use the physical models described below. The metronome and the drum kit are real one-shots from the same MuseScore General kit.
 
 Strings are physically modeled, not sampled. Each string has two vibration planes, which give a fast and a slow decay and a gentle beating. The pick position shapes the tone, and a body adds the resonances of a guitar's air cavity and top plate. Mandolin, bağlama and oud get doubled courses, and everything plays in a small stereo room. A strum moves low to high at a human pace, an upstroke is lighter and mostly hits the treble strings, and a new chord silences the notes it replaces, as a real string would. Each instrument has its own sound (steel, nylon, electric, bass, ukulele, mandolin, banjo, bağlama, oud). For guitars, Settings → Guitar sound picks Acoustic (steel), Classical (nylon) or Electric. Violin, viola, cello and double bass are bowed: a band-limited Helmholtz sawtooth with rosin noise, a gradual bow attack, vibrato that blooms after the note starts, and violin-family body formants.
 
@@ -89,7 +102,7 @@ Strings are physically modeled, not sampled. Each string has two vibration plane
 | | |
 |---|---|
 | ⌃⌥T | Open the menu bar tuner from any app |
-| ⌘1 – ⌘6 | Tuner / Chords / Progressions / Scales / Metronome / Sing & Find |
+| ⌘1 – ⌘7 | Tuner / Chords / Progressions / Scales / Metronome / Sing & Find / EarQuiz |
 | ⌘F | Find a chord |
 | ⌘R or Space | Reference tone |
 | 1–8, ← → | Lock a string |

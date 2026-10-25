@@ -50,6 +50,7 @@ enum MainMenu {
             item("Scales", #selector(AppDelegate.showScales(_:)), "4"),
             item("Metronome", #selector(AppDelegate.showMetronome(_:)), "5"),
             item("Sing & Find", #selector(AppDelegate.showSing(_:)), "6"),
+            item("EarQuiz", #selector(AppDelegate.showEarQuiz(_:)), "7"),
             .separator(),
             item("Reference Tone", #selector(AppDelegate.toggleReference(_:)), "r"),
             item("Start/Stop Metronome", #selector(AppDelegate.toggleMetronome(_:)), "k"),
