@@ -67,6 +67,9 @@ final class Prefs: ObservableObject {
     @Published var progressionDrums: String { didSet { d.set(progressionDrums, forKey: "progressionDrums") } }
     @Published var progressionLoop: Bool { didSet { d.set(progressionLoop, forKey: "progressionLoop") } }
     @Published var progressionSwing: Bool { didSet { d.set(progressionSwing, forKey: "progressionSwing") } }
+    /// Backing band styles (BassStyle / KeysStyle raw values); "auto" follows the drums and rhythm.
+    @Published var progressionBass: String { didSet { d.set(progressionBass, forKey: "progressionBass") } }
+    @Published var progressionKeys: String { didSet { d.set(progressionKeys, forKey: "progressionKeys") } }
 
     // MARK: Scales
     @Published var scaleID: String { didSet { d.set(scaleID, forKey: "scale") } }
@@ -127,6 +130,8 @@ final class Prefs: ObservableObject {
         progressionDrums = d.string(forKey: "progressionDrums") ?? "off"
         progressionLoop = d.object(forKey: "progressionLoop") as? Bool ?? true
         progressionSwing = d.bool(forKey: "progressionSwing")
+        progressionBass = d.string(forKey: "progressionBass") ?? "auto"
+        progressionKeys = d.string(forKey: "progressionKeys") ?? "auto"
 
         scaleID = d.string(forKey: "scale") ?? "major"
         scaleRoot = d.integer(forKey: "scaleRoot")

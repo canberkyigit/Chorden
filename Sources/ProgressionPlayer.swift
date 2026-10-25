@@ -203,6 +203,7 @@ final class ProgressionPlayer: ObservableObject {
     /// Beat where a pass through the progression starts. Adding or removing a chord moves it, so the loop
     /// carries on from the same chord instead of jumping.
     private var loopOrigin = 0.0
+    private let band = BackingBand()
 
     var beatsPerChord: Int { prefs.progressionBeats }
     var totalBeats: Double { Double((progression?.steps.count ?? 0) * beatsPerChord) }
@@ -216,6 +217,7 @@ final class ProgressionPlayer: ObservableObject {
 
     func start() {
         if progression == nil { generate() }
+        preloadBand()
         synth.prepare()
         synth.keepAlive = true
         anchorBPM = prefs.progressionBPM
@@ -224,6 +226,7 @@ final class ProgressionPlayer: ObservableObject {
         anchorBeat = 0
         scheduledUntil = 0
         loopOrigin = 0
+        band.reset()
         playing = true
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.tick() }
@@ -236,6 +239,7 @@ final class ProgressionPlayer: ObservableObject {
         timer?.invalidate()
         timer = nil
         synth.cancelScheduled()
+        synth.stopBacking()
         synth.keepAlive = false
         chord = nil
         beat = nil
@@ -249,6 +253,32 @@ final class ProgressionPlayer: ObservableObject {
     }
 
     private var sampleRate: Double { synth.outputSampleRate }
+
+    // MARK: - Band
+
+    /// Bass and keys as they'll play now: Auto follows the drums and rhythm, and steps aside when the chosen
+    /// instrument already plays that part (a bass guitar, the piano).
+    var bandStyles: (bass: BassStyle, keys: KeysStyle) {
+        let auto = autoStyles
+        let bass = BassStyle(rawValue: prefs.progressionBass) ?? .auto
+        let keys = KeysStyle(rawValue: prefs.progressionKeys) ?? .auto
+        return (bass == .auto ? auto.bass : bass, keys == .auto ? auto.keys : keys)
+    }
+
+    /// What Auto plays with the current drums, rhythm and instrument.
+    var autoStyles: (bass: BassStyle, keys: KeysStyle) {
+        let auto = BackingBand.auto(drums: DrumPattern(rawValue: prefs.progressionDrums) ?? .off,
+                                    rhythm: StrumPattern(rawValue: prefs.progressionPattern) ?? .downUp)
+        return (["bass", "contrabass"].contains(Timbre.current().samples) ? .off : auto.bass,
+                prefs.instrument.isKeyboard ? .off : auto.keys)
+    }
+
+    /// Decodes the bass and piano recordings ahead of the first beat.
+    func preloadBand() {
+        let styles = bandStyles
+        if styles.bass != .off { SampleLibrary.shared.preload(Synth.BackingPart.bass.samples) }
+        if styles.keys != .off { SampleLibrary.shared.preload(Synth.BackingPart.keys.samples) }
+    }
 
     private static func mod(_ a: Double, _ m: Double) -> Double { let r = a.truncatingRemainder(dividingBy: m); return r < 0 ? r + m : r }
 
@@ -382,6 +412,30 @@ final class ProgressionPlayer: ObservableObject {
         }
         for (offset, kind, v) in drums.bar where offset >= barPos && offset < barPos + 1 {
             synth.schedule(drum: kind, at: at(offset, barBeat: barPos), velocity: v)
+        }
+
+        // Bass and keys follow the drummer's feel: swung eighths with a jazz or shuffle groove, or with Swing on.
+        let styles = bandStyles
+        guard styles.bass != .off || styles.keys != .off else { return }
+        let feel = swing || drums == .jazz || drums == .shuffle
+        func time(_ beat: Double) -> UInt64 {
+            let frac = beat - floor(beat)
+            return sample(at: feel && abs(frac - 0.5) < 0.01 ? floor(beat) + 2.0 / 3 : beat)
+        }
+        let next = (index + 1) % p.steps.count
+        let context = BackingBand.Beat(beat: b, barPos: barPos, inChord: inChord, chordBeats: bpc,
+                                       root: p.root(index), quality: Chords.quality(p.steps[index].quality),
+                                       nextRoot: p.root(next), nextQuality: Chords.quality(p.steps[next].quality),
+                                       key: p.key, minor: p.minor, drums: drums)
+        if styles.bass != .off {
+            for e in band.bass(styles.bass, context) {
+                synth.schedule(.bass, notes: e.notes, at: time(e.beat), velocity: e.velocity, hold: e.length * secondsPerBeat)
+            }
+        }
+        if styles.keys != .off {
+            for e in band.keys(styles.keys, context, bassPlaying: styles.bass != .off, high: prefs.instrument.isKeyboard) {
+                synth.schedule(.keys, notes: e.notes, at: time(e.beat), velocity: e.velocity, hold: e.length * secondsPerBeat)
+            }
         }
     }
 

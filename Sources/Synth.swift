@@ -25,10 +25,12 @@ final class Synth {
         var bows: [BowedVoice] = []
         var sampled: [SampleVoice] = []
         var drums: [DrumVoice] = []
+        var backing: [BackingVoice] = []
         /// Stop every ringing string at this time (palm mutes, skanks).
         var mute = false
     }
     nonisolated(unsafe) private var incomingTimed: [Timed] = []
+    nonisolated(unsafe) private var backingStopRequested = false
     /// Sample time at the start of the last render cycle, for the sequencer's clock.
     nonisolated(unsafe) private var publishedClock: UInt64 = 0
     /// Keeps the output running between sequenced events (a looping progression).
@@ -59,6 +61,8 @@ final class Synth {
     /// Recorded notes: they already carry their instrument's body, so they skip the body filter.
     nonisolated(unsafe) private var sampled: [SampleVoice] = []
     nonisolated(unsafe) private var tracks: [SampleVoice] = []
+    /// The progression's bass and keys: their own instruments, mixed with their own level, place and room.
+    nonisolated(unsafe) private var backing: [BackingVoice] = []
     nonisolated(unsafe) private var voiceGain: Float = 1
     nonisolated(unsafe) private var voiceGoal: Float = 1
     nonisolated(unsafe) private var clock: UInt64 = 0
@@ -235,6 +239,46 @@ final class Synth {
         lock.withLockUnchecked { incomingTimed.append(Timed(at: at, drums: [d])) }
     }
 
+    /// The progression's backing band. Each part plays its own recorded instrument, whatever instrument is chosen.
+    enum BackingPart: String {
+        case bass, keys
+        var samples: String { self == .bass ? "bass" : "piano" }
+        /// Level over the set's own (which is set for a strummed chord): measured so the bass sits ~3 LU under the
+        /// guitar's strumming and pads ~8 LU under it.
+        var gain: Double { 1.3 }
+        /// Bass in the centre, keys a little left of the guitar.
+        var pan: Double { self == .bass ? 0 : -0.32 }
+        /// Room: the bass nearly dry and tight, the piano with some air.
+        var send: Float { self == .bass ? 0.05 : 0.5 }
+        /// How fast a let-go note dies: a bassist's muting hand, a piano damper.
+        var release: Double { self == .bass ? 0.04 : 0.14 }
+    }
+
+    /// Bass or keys notes (MIDI, at A4 = 440 before the user's reference pitch) starting at sample `at`, held `hold` seconds.
+    func schedule(_ part: BackingPart, notes: [Int], at: UInt64, velocity: Double, hold: Double) {
+        #if SNAPSHOT
+        if let r = testRecorder { return r("\(part.rawValue) " + notes.map(String.init).joined(separator: ","), at) }
+        #endif
+        guard !notes.isEmpty, let set = SampleLibrary.shared.notes(part.samples), !set.isEmpty else { return }
+        let sr = sampleRate
+        let shift = 12 * log2(Prefs.shared.a4 / 440)
+        var t = 0.0
+        let voices = notes.map { m -> BackingVoice in
+            let v = max(0.15, min(1, velocity + Double.random(in: -0.04...0.04)))
+            let voice = SampleVoice(notes: set, midi: Double(m) + shift, sampleRate: sr, delay: Int(t * sr), velocity: v,
+                                    hold: hold, string: nil, pan: part.pan, release: part.release, gain: part.gain)
+            // A pianist's fingers land almost, not quite, together.
+            t += Double.random(in: 0.002...0.007)
+            return BackingVoice(voice: voice, send: part.send)
+        }
+        lock.withLockUnchecked { incomingTimed.append(Timed(at: at, backing: voices)) }
+    }
+
+    /// Lets go of the bass and keys (the loop stopped): no pad left hanging.
+    func stopBacking() {
+        lock.withLockUnchecked { backingStopRequested = true }
+    }
+
     /// Plays a recording (the user's sung take) starting exactly at sample `at`.
     func schedule(audio note: SampleNote, at: UInt64) {
         let v = SampleVoice(notes: [note], midi: note.midi, sampleRate: sampleRate, delay: 0, velocity: 1, hold: nil,
@@ -344,6 +388,12 @@ final class Synth {
                     self.sampled.removeAll { !$0.started }
                 }
                 self.publishedClock = self.clock
+                // Before anything newly queued joins: a stop followed by a restart keeps the new notes.
+                if self.backingStopRequested {
+                    self.backingStopRequested = false
+                    self.backing.removeAll { !$0.voice.started }
+                    for v in self.backing.indices { self.backing[v].voice.release() }
+                }
                 for item in self.incomingTimed {
                     let offset = item.at > self.clock ? Int(item.at - self.clock) : 0
                     if item.mute {
@@ -375,6 +425,7 @@ final class Synth {
                         }
                     }
                     self.drums += item.drums.map { var v = $0; v.delay += offset; return v }
+                    self.backing += item.backing.map { var v = $0; v.voice.delay += offset; return v }
                 }
                 self.incomingTimed.removeAll(keepingCapacity: true)
                 for (at, v) in self.incomingTracks {
@@ -398,7 +449,7 @@ final class Synth {
                 self.incomingTimbre = nil
                 self.clicks += self.incomingClicks
                 self.incomingClicks.removeAll(keepingCapacity: true)
-                if self.keepAlive || !self.tracks.isEmpty || !self.sampled.isEmpty || !self.drums.isEmpty || !self.voices.isEmpty || !self.bows.isEmpty || !self.clicks.isEmpty || self.toneTarget != nil || self.tone.amp > 0.0001 || self.metronome.running {
+                if self.keepAlive || !self.tracks.isEmpty || !self.backing.isEmpty || !self.sampled.isEmpty || !self.drums.isEmpty || !self.voices.isEmpty || !self.bows.isEmpty || !self.clicks.isEmpty || self.toneTarget != nil || self.tone.amp > 0.0001 || self.metronome.running {
                     self.lastSound = Date()
                 }
                 if self.metronomeRestart {
@@ -453,7 +504,14 @@ final class Synth {
                     r = 0
                     self.resetBus()
                 }
-                let (wl, wr) = self.room.process(l + r)
+                var roomIn = l + r
+                for v in self.backing.indices {
+                    let x = self.backing[v].voice.next()
+                    l += x * self.backing[v].voice.panL
+                    r += x * self.backing[v].voice.panR
+                    roomIn += x * self.backing[v].send
+                }
+                let (wl, wr) = self.room.process(roomIn)
                 l += wl * self.roomLevel
                 r += wr * self.roomLevel
                 var center = self.tone.next(sr)
@@ -476,6 +534,7 @@ final class Synth {
             self.clicks.removeAll { $0.finished }
             self.drums.removeAll { $0.finished }
             self.sampled.removeAll { $0.finished }
+            self.backing.removeAll { $0.voice.finished }
             self.tracks.removeAll { $0.finished }
             self.clock += UInt64(frames)
             return noErr
@@ -497,12 +556,19 @@ final class Synth {
                 self.voices = []
                 self.bows = []
                 self.sampled = []
+                self.backing = []
                 self.tracks = []
                 self.tone = ToneVoice()
                 t.invalidate()
             }
         }
     }
+}
+
+/// A bass or keys note and how much of it goes to the room.
+struct BackingVoice {
+    var voice: SampleVoice
+    let send: Float
 }
 
 enum DrumKind {

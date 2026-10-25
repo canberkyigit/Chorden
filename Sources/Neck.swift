@@ -44,11 +44,17 @@ struct NeckView: View {
     var focus: ClosedRange<Int>? = nil
     /// The dot sounding right now (scale playback).
     var active: NeckMark? = nil
+    /// Strings drawn with a × at the nut (chord finder).
+    var muted: Set<Int> = []
+    /// Makes the whole neck a tap target: (string, fret) of the nearest position, 0 = open.
+    var onTap: ((Int, Int) -> Void)? = nil
+    /// Space between strings; the chord finder uses roomier rows as tap targets.
+    var rowH: CGFloat = 26
     @ObservedObject var prefs = Prefs.shared
+    @State private var hover: (string: Int, fret: Int)?
 
     private var fretted: Bool { instrument.frets > 0 }
     private var count: Int { fretted ? min(instrument.frets, 15) : 12 }
-    private let rowH: CGFloat = 26
     private let openW: CGFloat = 34
 
     var body: some View {
@@ -84,6 +90,15 @@ struct NeckView: View {
                         ctx.draw(Text("\(i)").font(.system(size: 9, weight: .medium)).foregroundColor(Theme.ghost),
                                  at: CGPoint(x: x, y: top + height + 16))
                     }
+                    for s in muted where s < n {
+                        ctx.draw(Text("×").font(.system(size: 13)).foregroundColor(Theme.ghost),
+                                 at: CGPoint(x: openW / 2, y: top + CGFloat(n - 1 - s) * rowH))
+                    }
+                    if let h = hover, !marks.contains(where: { $0.string == h.string && Int($0.position.rounded()) == h.fret }) {
+                        let c = CGPoint(x: x(Double(h.fret), xs), y: top + CGFloat(n - 1 - h.string) * rowH)
+                        ctx.stroke(Path(ellipseIn: CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20)),
+                                   with: .color(Theme.dim.opacity(0.6)), lineWidth: 1)
+                    }
                 }
                 ForEach(marks, id: \.self) { m in
                     let row = n - 1 - m.string
@@ -99,10 +114,37 @@ struct NeckView: View {
                         .zIndex(lit ? 1 : 0)
                         .onTapGesture { Synth.shared.pluck(Music.frequency(midi: m.midi, a4: prefs.a4)) }
                         .help(m.approx ? tr("Microtonal: nearest fret shown") : "")
+                        .allowsHitTesting(onTap == nil)
+                }
+                if let onTap {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(SpatialTapGesture().onEnded { e in
+                            let p = spot(e.location, xs, n)
+                            onTap(p.string, p.fret)
+                        })
+                        .onContinuousHover { phase in
+                            if case .active(let loc) = phase { hover = spot(loc, xs, n) } else { hover = nil }
+                        }
                 }
             }
         }
         .frame(height: CGFloat(n - 1) * rowH + 40)
+    }
+
+    /// The string and fret under a point: frets between their wires, fretless stops at the nearest semitone.
+    private func spot(_ p: CGPoint, _ xs: [CGFloat], _ n: Int) -> (string: Int, fret: Int) {
+        let row = min(n - 1, max(0, Int(((p.y - 8) / rowH).rounded())))
+        var fret = 0
+        if p.x >= openW {
+            let dx = p.x - openW
+            if fretted {
+                fret = min(count, max(1, (xs.firstIndex { $0 > dx } ?? count)))
+            } else {
+                fret = (1...count).min { abs(xs[$0] - dx) < abs(xs[$1] - dx) } ?? 1
+            }
+        }
+        return (n - 1 - row, fret)
     }
 
     /// Fretted: between the fret wires. Fretless: exactly where the finger stops the string.

@@ -90,6 +90,7 @@ enum Strings {
 
         // Instruments
         "Chromatic": "Kromatik", "Makam": "Makam", "any note": "her nota", "53-koma degrees": "53 komalık perdeler",
+        "Find by notes": "Notalardan bul", "Tap notes on the neck or keyboard and Chorden names the chord": "Sapta ya da klavyede notalara tıkla, Chorden akorun adını söylesin", "Click keys to add or remove notes": "Nota eklemek ya da çıkarmak için tuşlara tıkla", "Click a fret to set a string · again to mute": "Teli ayarlamak için perdeye tıkla · susturmak için yine tıkla", "Pick some notes": "Notalara tıkla", "Open in chord view": "Akor görünümünde aç", "No common name": "Bilinen bir adı yok", "%@ in the bass": "basta %@", "rootless": "köksüz", "or": "ya da", "could be": "belki",
         "Guitar": "Gitar", "7-String Guitar": "7 Telli Gitar", "8-String Guitar": "8 Telli Gitar",
         "Bass": "Bas Gitar", "5-String Bass": "5 Telli Bas", "6-String Bass": "6 Telli Bas",
         "Violin": "Keman", "Viola": "Viyola", "Cello": "Çello", "Double Bass": "Kontrbas",
@@ -135,6 +136,7 @@ enum Strings {
         "Microtonal: nearest fret shown": "Mikrotonal: en yakın perde gösteriliyor",
         "%d chords": "%d akor", "Progressions": "Progresyon", "Play / stop the loop (Space)": "Döngüyü çal / durdur (Boşluk)",
         "Tempo": "Tempo", "Chord length": "Akor süresi", "Number of chords": "Akor sayısı", "Change chord": "Akoru değiştir", "Remove chord": "Akoru kaldır", "Add a chord": "Akor ekle", "Any chord": "Herhangi bir akor","½ bar": "½ ölçü", "1 bar": "1 ölçü", "2 bars": "2 ölçü",
+        "Keys": "Piyano", "Roots": "Kök sesler", "Root–fifth": "Kök–beşli", "Pop eighths": "Pop sekizlik", "Octaves": "Oktavlar", "Walking": "Walking (caz)", "Pads": "Uzun akorlar", "Broken chords": "Çözülmüş akor", "Arpeggio": "Arpej", "Stabs": "Kısa vuruşlar", "Jazz comping": "Caz eşliği",
         "My progressions": "Progresyonlarım", "My takes": "Kayıtlarım", "Saved": "Kaydedildi", "Rename": "Yeniden adlandır", "Click again to delete": "Silmek için tekrar tıkla", "Open a saved progression": "Kaydedilmiş bir progresyonu aç", "Open a saved take": "Kaydedilmiş bir kaydı aç", "Save this progression with its tempo and rhythm": "Bu progresyonu temposu ve ritmiyle kaydet", "Keep this take with your voice and chosen chords; reopen it from My takes": "Bu kaydı sesin ve seçtiğin akorlarla sakla; Kayıtlarım'dan yeniden aç",
         "Rhythm": "Ritim", "Drums": "Davul", "Swing": "Swing", "Loop": "Döngü",
         "Whole": "Uzun", "Quarters": "Dörtlük", "Down-up": "Aşağı-yukarı", "Folk strum": "Folk", "Fingerpicking": "Parmak (arpej)",
