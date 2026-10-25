@@ -37,7 +37,7 @@ final class EarQuizModel: ObservableObject {
     private var pending: DispatchWorkItem?
 
     private init() {
-        mode = EarMode(rawValue: d.string(forKey: "earQuiz.mode") ?? "") ?? .intervals
+        mode = EarMode(rawValue: d.string(forKey: "earQuiz.mode") ?? "") ?? .mixed
         sets = d.dictionary(forKey: "earQuiz.sets") as? [String: [String]] ?? [:]
         waySets = d.dictionary(forKey: "earQuiz.ways") as? [String: [String]] ?? [:]
         autoNext = d.object(forKey: "earQuiz.autoNext") as? Bool ?? true
@@ -47,24 +47,31 @@ final class EarQuizModel: ObservableObject {
 
     // MARK: The answers in play
 
-    var allItems: [EarItem] { EarQuiz.items(mode) }
+    /// The kind of the question on screen: the chosen tab, or in Mixed the kind just asked.
+    var current: EarMode { mode == .mixed ? (question?.mode ?? .intervals) : mode }
+
+    var allItems: [EarItem] { EarQuiz.items(current) }
 
     /// Answers in play, in the canonical order (number keys follow it).
-    var inPlay: [String] {
-        let chosen = Set(sets[mode.rawValue] ?? EarQuiz.presets(mode)[0].items)
-        return allItems.map(\.id).filter(chosen.contains)
+    var inPlay: [String] { inPlay(current) }
+
+    private func inPlay(_ m: EarMode) -> [String] {
+        let chosen = Set(sets[m.rawValue] ?? EarQuiz.defaultSet(m))
+        return EarQuiz.items(m).map(\.id).filter(chosen.contains)
     }
 
-    var ways: [String] { waySets[mode.rawValue] ?? EarQuiz.defaultWays(mode) }
+    var ways: [String] { ways(current) }
+
+    private func ways(_ m: EarMode) -> [String] { waySets[m.rawValue] ?? EarQuiz.defaultWays(m) }
 
     /// The preset the current set matches, if any.
     var presetID: String? {
         let s = Set(inPlay)
-        return EarQuiz.presets(mode).first { Set($0.items) == s }?.id
+        return EarQuiz.presets(current).first { Set($0.items) == s }?.id
     }
 
     func choose(_ preset: EarPreset) {
-        sets[mode.rawValue] = preset.items
+        sets[current.rawValue] = preset.items
         d.set(sets, forKey: "earQuiz.sets")
         newSet()
     }
@@ -77,7 +84,7 @@ final class EarQuizModel: ObservableObject {
         } else {
             s.append(item)
         }
-        sets[mode.rawValue] = s
+        sets[current.rawValue] = s
         d.set(sets, forKey: "earQuiz.sets")
         newSet()
     }
@@ -85,12 +92,12 @@ final class EarQuizModel: ObservableObject {
     func toggleWay(_ id: String) {
         var w = ways
         if let i = w.firstIndex(of: id) {
-            if EarQuiz.needsWay(mode) && w.count == 1 { return }
+            if EarQuiz.needsWay(current) && w.count == 1 { return }
             w.remove(at: i)
         } else {
             w.append(id)
         }
-        waySets[mode.rawValue] = w
+        waySets[current.rawValue] = w
         d.set(waySets, forKey: "earQuiz.ways")
         if let q = question, chosen == nil, !w.contains(q.way), q.way != "" { next() }
     }
@@ -106,7 +113,8 @@ final class EarQuizModel: ObservableObject {
 
     // MARK: Score
 
-    private func key(_ item: String) -> String { mode.rawValue + "." + item }
+    private func key(_ item: String) -> String { key(current, item) }
+    private func key(_ m: EarMode, _ item: String) -> String { m.rawValue + "." + item }
 
     func accuracy(_ item: String) -> Int? {
         guard let s = stats[key(item)], s[1] >= 3 else { return nil }
@@ -132,6 +140,10 @@ final class EarQuizModel: ObservableObject {
     }
 
     func forgetScores() {
+        if mode == .mixed {
+            stats = [:]
+            best = [:]
+        }
         for id in allItems.map(\.id) { stats[key(id)] = nil }
         best[mode.rawValue] = nil
         d.set(stats, forKey: "earQuiz.stats")
@@ -145,7 +157,7 @@ final class EarQuizModel: ObservableObject {
 
     func isCorrect(_ item: String) -> Bool {
         guard let q = question else { return false }
-        return EarQuiz.sameSound(mode, item, q.item)
+        return EarQuiz.sameSound(q.mode, item, q.item)
     }
 
     /// Space: the first question, or the current one again.
@@ -169,15 +181,31 @@ final class EarQuizModel: ObservableObject {
     func next() {
         pending?.cancel()
         pending = nil
-        let stat = Dictionary(uniqueKeysWithValues: inPlay.map { id -> (String, (Int, Int)) in
-            let s = stats[key(id)] ?? [0, 0]
+        var rng = SystemRandomNumberGenerator()
+        var m = mode
+        if mode == .mixed {
+            // A different kind more often than not, so the questions keep changing.
+            let kinds = EarMode.mixable.map { k in (k.mode, k.weight * (k.mode == question?.mode ? 0.35 : 1)) }
+            var pick = Double.random(in: 0..<kinds.reduce(0) { $0 + $1.1 }, using: &rng)
+            m = kinds.last!.0
+            for (k, w) in kinds {
+                if pick < w { m = k; break }
+                pick -= w
+            }
+        }
+        let prefix = m.rawValue + "."
+        let pool = inPlay(m)
+        let stat = Dictionary(uniqueKeysWithValues: pool.map { id -> (String, (Int, Int)) in
+            let s = stats[key(m, id)] ?? [0, 0]
             return (id, (s[0], s[1]))
         })
-        var rng = SystemRandomNumberGenerator()
-        let q = EarQuiz.makeQuestion(mode: mode, set: inPlay, ways: ways,
+        let missed = Dictionary(uniqueKeysWithValues: misses.filter { $0.key.hasPrefix(prefix) }
+            .map { (String($0.key.dropFirst(prefix.count)), $0.value) })
+        let lately = recent.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
+        let q = EarQuiz.makeQuestion(mode: m, set: pool, ways: ways(m),
                                      register: EarQuiz.register(prefs.instrument, prefs.tuning),
-                                     stats: stat, misses: misses, recent: recent, random: &rng)
-        recent = Array((recent + [q.item]).suffix(3))
+                                     stats: stat, misses: missed, recent: lately, random: &rng)
+        recent = Array((recent + [key(m, q.item)]).suffix(8))
         question = q
         chosen = nil
         sounding = nil
@@ -215,21 +243,21 @@ final class EarQuizModel: ObservableObject {
             best[mode.rawValue] = s[2]
             d.set(best, forKey: "earQuiz.best")
         }
-        var st = stats[key(q.item)] ?? [0, 0]
+        var st = stats[key(q.mode, q.item)] ?? [0, 0]
         st[1] += 1
         if right { st[0] += 1 }
-        stats[key(q.item)] = st
+        stats[key(q.mode, q.item)] = st
         d.set(stats, forKey: "earQuiz.stats")
         if right {
-            misses[q.item] = max(0, (misses[q.item] ?? 0) - 1)
+            misses[key(q.mode, q.item)] = max(0, (misses[key(q.mode, q.item)] ?? 0) - 1)
             if autoNext {
                 let work = DispatchWorkItem { [weak self] in self?.next() }
                 pending = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.1, execute: work)
             }
         } else {
-            misses[q.item, default: 0] += 2
-            misses[item, default: 0] += 1
+            misses[key(q.mode, q.item), default: 0] += 2
+            misses[key(q.mode, item), default: 0] += 1
         }
     }
 
@@ -286,10 +314,10 @@ final class EarQuizModel: ObservableObject {
     // MARK: Names
 
     func title(_ item: String) -> String {
-        if mode == .notes { return prefs.notation.name(pc: Int(item) ?? 0) }
+        if current == .notes { return prefs.notation.name(pc: Int(item) ?? 0) }
         let name = tr(allItems.first { $0.id == item }?.name ?? item)
         // Chord names are lower case in the chord library ("minor 7th").
-        guard mode == .chords, let first = name.first else { return name }
+        guard current == .chords, let first = name.first else { return name }
         return String(first).uppercased(with: Locale(identifier: prefs.language == .tr ? "tr" : "en")) + name.dropFirst()
     }
 
@@ -313,6 +341,8 @@ final class EarQuizModel: ObservableObject {
             return scale.degrees.indices.map { Scales.degreeLabel(scale, $0, root: pc, n) }.joined(separator: " ")
         case .notes:
             return n.name(pc: q.root) + "\(q.root / 12 - 1)"
+        case .mixed:
+            return ""
         }
     }
 }
@@ -336,6 +366,19 @@ struct EarQuizView: View {
             .padding(.top, 6)
             .padding(.horizontal, -8)
 
+            if mode == .mixed {
+                HStack(spacing: 6) {
+                    Text(tr("Intervals, chords, scales and notes, all mixed, from each kind's set."))
+                        .font(.system(size: 11)).foregroundStyle(Theme.dim)
+                    Spacer()
+                    if let q = model.question {
+                        Text(tr(q.mode.title)).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text)
+                            .padding(.horizontal, 8).padding(.vertical, 3)
+                            .background(Theme.line.opacity(0.6), in: Capsule())
+                    }
+                }
+                .padding(.top, 12)
+            } else {
             HStack(spacing: 2) {
                 ForEach(EarQuiz.presets(mode)) { p in
                     TextChoice(title: tr(p.id), selected: !model.editing && model.presetID == p.id, size: 11) {
@@ -354,6 +397,7 @@ struct EarQuizView: View {
             }
             .padding(.top, 8)
             .padding(.horizontal, -8)
+            }
 
             Spacer(minLength: 12)
             prompt
@@ -445,7 +489,7 @@ struct EarQuizView: View {
                 Text(model.title(q.item)).font(font)
             }
         } else {
-            Text(tr(model.mode.prompt)).font(font)
+            Text(tr(model.current.prompt)).font(font)
         }
     }
 

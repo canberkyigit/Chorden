@@ -2,12 +2,16 @@ import Foundation
 
 // MARK: - What can be asked
 
-/// The four kinds of question the EarQuiz tab asks.
+/// The kinds of question the EarQuiz tab asks; Mixed draws from all the others.
 enum EarMode: String, CaseIterable {
-    case intervals, chords, scales, notes
+    case mixed, intervals, chords, scales, notes
+
+    /// The kinds Mixed draws from, with how often each comes up.
+    static let mixable: [(mode: EarMode, weight: Double)] = [(.intervals, 1), (.chords, 1), (.scales, 0.8), (.notes, 0.35)]
 
     var title: String {
         switch self {
+        case .mixed: return "Mixed"
         case .intervals: return "Intervals"
         case .chords: return "Chords"
         case .scales: return "Scales & Makams"
@@ -17,6 +21,7 @@ enum EarMode: String, CaseIterable {
 
     var prompt: String {
         switch self {
+        case .mixed: return "What do you hear?"
         case .intervals: return "Which interval?"
         case .chords: return "Which chord?"
         case .scales: return "Which scale?"
@@ -64,21 +69,28 @@ struct EarEvent: Equatable {
 
 enum EarQuiz {
     /// Letter-steps above the root for each interval in semitones (the tritone as an augmented 4th).
-    static let intervalSteps = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6, 7]
+    static let intervalSteps = [0, 1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6, 7, 8, 8, 9, 9, 10, 10, 11]
     static let intervalNames = ["Unison", "Minor 2nd", "Major 2nd", "Minor 3rd", "Major 3rd", "Perfect 4th", "Tritone",
-                                "Perfect 5th", "Minor 6th", "Major 6th", "Minor 7th", "Major 7th", "Octave"]
-    static let chordIDs = ["", "m", "dim", "aug", "sus2", "sus4", "7", "maj7", "m7", "m7♭5", "dim7", "mMaj7", "6", "m6", "9", "add9"]
+                                "Perfect 5th", "Minor 6th", "Major 6th", "Minor 7th", "Major 7th", "Octave",
+                                "Minor 9th", "Major 9th", "Minor 10th", "Major 10th", "Perfect 11th", "Augmented 11th", "Perfect 12th"]
+    /// Intervals asked: within the octave, then the compound ones.
+    static let intervalIDs = (1...12).map(String.init) + ["13", "14", "15", "16", "17", "19"]
+    static let chordIDs = ["", "m", "5", "dim", "aug", "sus2", "sus4", "7", "maj7", "m7", "m7♭5", "dim7", "mMaj7", "7sus4",
+                           "6", "m6", "6/9", "add9", "madd9", "9", "maj9", "m9", "7♭9", "7♯9", "7♯5", "13"]
     static let scaleIDs = ["major", "minor", "harmonic", "melodic", "dorian", "phrygian", "lydian", "mixolydian", "locrian",
-                           "majpent", "minpent", "blues",
-                           "rast", "ussak", "huseyni", "hicaz", "kurdi", "nihavend", "saba", "karcigar", "hicazkar", "suzinak"]
+                           "majpent", "minpent", "blues", "whole", "phrygdom", "hungarian", "hirajoshi",
+                           "rast", "ussak", "huseyni", "hicaz", "kurdi", "nihavend", "saba", "karcigar", "hicazkar", "suzinak",
+                           "humayun", "buselik", "mahur", "zirguleli", "sedaraban", "nikriz", "neveser"]
     /// Shorter names than the Scales tab's ("Major" for "Major (Ionian)").
     private static let scaleNames = ["major": "Major", "minor": "Minor", "harmonic": "Harmonic Minor", "melodic": "Melodic Minor",
                                      "majpent": "Major Pentatonic", "minpent": "Minor Pentatonic"]
 
     static func items(_ mode: EarMode) -> [EarItem] {
         switch mode {
+        case .mixed:
+            return []
         case .intervals:
-            return (1...12).map { EarItem(id: "\($0)", name: intervalNames[$0]) }
+            return intervalIDs.map { EarItem(id: $0, name: intervalNames[Int($0)!]) }
         case .chords:
             return chordIDs.map { id in EarItem(id: id, name: Chords.quality(id).name) }
         case .scales:
@@ -90,19 +102,29 @@ enum EarQuiz {
 
     static func presets(_ mode: EarMode) -> [EarPreset] {
         switch mode {
+        case .mixed:
+            return [EarPreset(id: "All", items: [])]
         case .intervals:
             return [EarPreset(id: "Beginner", items: ["3", "4", "7", "12"]),
                     EarPreset(id: "Intermediate", items: ["1", "2", "3", "4", "5", "7", "9", "12"]),
-                    EarPreset(id: "All", items: (1...12).map(String.init))]
+                    EarPreset(id: "Octave", items: (1...12).map(String.init)),
+                    EarPreset(id: "Compound", items: ["12", "13", "14", "15", "16", "17", "19"]),
+                    EarPreset(id: "All", items: intervalIDs)]
         case .chords:
             return [EarPreset(id: "Beginner", items: ["", "m"]),
                     EarPreset(id: "Triads", items: ["", "m", "dim", "aug", "sus2", "sus4"]),
-                    EarPreset(id: "Sevenths", items: ["7", "maj7", "m7", "m7♭5", "dim7"]),
+                    EarPreset(id: "Common", items: ["", "m", "dim", "aug", "sus2", "sus4", "7", "maj7", "m7", "6", "add9"]),
+                    EarPreset(id: "Sevenths", items: ["7", "maj7", "m7", "m7♭5", "dim7", "mMaj7", "7sus4"]),
+                    EarPreset(id: "Extended", items: ["6", "6/9", "add9", "9", "maj9", "m9", "7♭9", "7♯9", "13"]),
                     EarPreset(id: "All", items: chordIDs)]
         case .scales:
             return [EarPreset(id: "Beginner", items: ["major", "minor", "harmonic", "majpent"]),
                     EarPreset(id: "Modes", items: ["major", "dorian", "phrygian", "lydian", "mixolydian", "minor", "locrian"]),
-                    EarPreset(id: "Makams", items: ["rast", "ussak", "huseyni", "hicaz", "kurdi", "nihavend", "saba", "karcigar"]),
+                    EarPreset(id: "Popular", items: ["major", "minor", "harmonic", "dorian", "mixolydian", "majpent", "minpent", "blues",
+                                                     "rast", "ussak", "hicaz", "kurdi", "nihavend", "huseyni"]),
+                    EarPreset(id: "Makams", items: ["rast", "ussak", "huseyni", "hicaz", "kurdi", "nihavend", "saba", "karcigar",
+                                                    "hicazkar", "suzinak", "humayun", "buselik", "mahur", "zirguleli",
+                                                    "sedaraban", "nikriz", "neveser"]),
                     EarPreset(id: "All", items: scaleIDs)]
         case .notes:
             return [EarPreset(id: "White keys", items: ["0", "2", "4", "5", "7", "9", "11"]),
@@ -110,8 +132,15 @@ enum EarQuiz {
         }
     }
 
+    /// The set a kind starts with until one is picked: wide enough that the questions keep varying.
+    static func defaultSet(_ mode: EarMode) -> [String] {
+        let id = [EarMode.intervals: "Octave", .chords: "Common", .scales: "Popular", .notes: "All"][mode] ?? ""
+        return (presets(mode).first { $0.id == id } ?? presets(mode)[0]).items
+    }
+
     static func ways(_ mode: EarMode) -> [EarWay] {
         switch mode {
+        case .mixed: return []
         case .intervals: return [EarWay(id: "up", name: "Up"), EarWay(id: "down", name: "Down"), EarWay(id: "together", name: "Together")]
         case .chords: return [EarWay(id: "together", name: "Together"), EarWay(id: "broken", name: "Broken")]
         case .scales: return []
@@ -127,7 +156,7 @@ enum EarQuiz {
         switch mode {
         case .intervals: return ["up"]
         case .chords: return ["together"]
-        case .scales, .notes: return []
+        case .scales, .notes, .mixed: return []
         }
     }
 
@@ -137,7 +166,7 @@ enum EarQuiz {
         case .intervals: return Int(item) ?? 12
         case .chords: return Chords.quality(item).intervals.max() ?? 7
         case .scales: return 12
-        case .notes: return 0
+        case .notes, .mixed: return 0
         }
     }
 
@@ -239,6 +268,8 @@ enum EarQuiz {
             return scaleRun(item, root: q.root).enumerated().map { i, m in
                 EarEvent(at: Double(i) * scaleStep, midis: [m], hold: scaleStep + 0.03, strings: [1])
             }
+        case .mixed:
+            return []
         }
     }
 
@@ -293,7 +324,7 @@ enum EarQuiz {
                 let digits = q.label(iv).filter(\.isNumber)
                 return (Int(digits).map { $0 - 1 } ?? 0, iv)
             }
-        case .scales, .notes:
+        case .scales, .notes, .mixed:
             return [(0, 0)]
         }
     }

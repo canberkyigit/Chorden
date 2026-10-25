@@ -44,6 +44,11 @@ enum Strings {
         // EarQuiz
         "Scales & Makams": "Diziler ve Makamlar", "Which interval?": "Hangi aralık?", "Which chord?": "Hangi akor?",
         "Which scale?": "Hangi dizi?", "Which note?": "Hangi nota?", "Minor 2nd": "Küçük 2'li", "Major 2nd": "Büyük 2'li",
+        "Mixed": "Karışık", "What do you hear?": "Ne duyuyorsun?", "Compound": "Bileşik", "Extended": "Genişletilmiş",
+        "Common": "Yaygın", "Popular": "Popüler",
+        "Minor 9th": "Küçük 9'lu", "Major 9th": "Büyük 9'lu", "Minor 10th": "Küçük 10'lu", "Major 10th": "Büyük 10'lu",
+        "Perfect 11th": "Tam 11'li", "Augmented 11th": "Artık 11'li", "Perfect 12th": "Tam 12'li",
+        "Intervals, chords, scales and notes, all mixed, from each kind's set.": "Aralık, akor, dizi ve nota karışık gelir; her türün kendi setinden.",
         "Minor 3rd": "Küçük 3'lü", "Major 3rd": "Büyük 3'lü", "Perfect 4th": "Tam 4'lü", "Perfect 5th": "Tam 5'li",
         "Minor 6th": "Küçük 6'lı", "Major 6th": "Büyük 6'lı", "Minor 7th": "Küçük 7'li", "Major 7th": "Büyük 7'li",
         "Octave": "Oktav", "Major": "Majör", "Minor": "Minör", "Beginner": "Başlangıç", "Intermediate": "Orta", "All": "Tümü",

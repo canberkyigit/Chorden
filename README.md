@@ -80,7 +80,8 @@ Press the mic and sing or hum a melody. Chord suggestions appear as you sing.
 
 Ear training in its own tab (⌘7):
 
-- **Intervals** (up, down or together), **Chords** (16 types, together or broken), **Scales & Makams** (12 Western scales and modes plus Rast, Uşşak, Hüseyni, Hicaz, Kürdî, Nihavend, Saba, Karcığar, Hicazkâr and Suzinak at their true 53-koma pitches) and **Notes**.
+- **Mixed** (the default) draws from every kind in turn, so intervals, chords, scales and notes keep alternating.
+- **Intervals** up to the 12th (up, down or together), **Chords** (26 types, from triads to 9ths, 7♭9/7♯9 and 13ths, together or broken), **Scales & Makams** (16 scales and modes plus 17 makams at their true 53-koma pitches) and **Notes**.
 - Ready-made sets from beginner to all, or a custom set of answers.
 - Space plays and replays, 1–9 answer, Return moves on. A wrong answer shows the right one with its spelled notes, and any answer can be played for comparison.
 - Streaks, session accuracy and per-item accuracy are kept; questions you miss come up more often.
