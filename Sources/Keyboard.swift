@@ -30,12 +30,12 @@ struct KeyboardView: View {
             let blackW = w * 0.62, blackH = height * 0.62
             ZStack(alignment: .topLeading) {
                 ForEach(Array(whites.enumerated()), id: \.element) { i, m in
-                    key(m, black: false, width: w - 1.5, keyHeight: height)
+                    key(m, black: false, width: w - 1.5, keyHeight: height, white: w)
                         .offset(x: CGFloat(i) * w)
                 }
                 ForEach((start...end).filter { isBlack($0) }, id: \.self) { m in
                     let left = whites.firstIndex(of: m - 1) ?? 0
-                    key(m, black: true, width: blackW, keyHeight: blackH)
+                    key(m, black: true, width: blackW, keyHeight: blackH, white: w)
                         .offset(x: CGFloat(left + 1) * w - blackW / 2 - 0.75)
                 }
             }
@@ -52,20 +52,31 @@ struct KeyboardView: View {
     private static let softPaper = Color(nsColor: NSColor(hex: 0xB9BAC2))
     private static let litText = Color(nsColor: NSColor(hex: 0x0E6B3A))
 
-    private func chip(_ width: CGFloat, _ black: Bool) -> CGFloat { min(20, black ? max(width - 3, 15) : width - 3) }
+    /// One chip size for the whole keyboard, from the white keys, so marks look alike on both colours and
+    /// scale with small keyboards; on black keys it may only just overhang the key. Unlabelled marks are dots.
+    private func chip(_ white: CGFloat, black: Bool, labelled: Bool) -> CGFloat {
+        var d = min(20, max(6, white - 4))
+        if black { d = min(d, white * 0.62 + 3) }
+        return labelled ? d : d * 0.8
+    }
 
     @ViewBuilder
-    private func key(_ m: Int, black: Bool, width: CGFloat, keyHeight: CGFloat) -> some View {
+    private func key(_ m: Int, black: Bool, width: CGFloat, keyHeight: CGFloat, white: CGFloat) -> some View {
         let mark = marks[m]
         let lit = active.contains(m)
+        // Unlabelled marks (small keyboards, e.g. progression cards) colour the key itself, which reads
+        // far better than a tiny dot; the root a shade stronger.
+        let tinted = mark.map { $0.label.isEmpty } ?? false
+        let tint = Theme.good.opacity(mark?.root == true ? (black ? 1 : 0.85) : (black ? 0.75 : 0.5))
         ZStack(alignment: .bottom) {
             RoundedRectangle(cornerRadius: black ? 3 : 5, style: .continuous)
                 .fill(lit ? Theme.good.opacity(black ? 0.95 : 0.8)
+                          : tinted ? tint
                           : (black ? Color(nsColor: .dynamic(light: 0x26272C, dark: 0x0B0B0D))
                                    : Color(nsColor: .dynamic(light: 0xFFFFFF, dark: 0xD9D9DE))))
                 .overlay(RoundedRectangle(cornerRadius: black ? 3 : 5, style: .continuous)
                     .strokeBorder(Color.black.opacity(black ? 0 : 0.25), lineWidth: 0.75))
-            if let mark {
+            if let mark, !tinted {
                 let fill = lit ? Self.paper : black ? (mark.root ? Self.paper : Self.softPaper) : (mark.root ? Self.ink : Self.softInk)
                 let text = lit ? Self.litText : black ? Self.ink : Self.paper
                 Text(mark.label)
@@ -73,12 +84,12 @@ struct KeyboardView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
                     .foregroundStyle(text)
-                    // Narrow black keys may carry a chip a little wider than the key.
-                    .frame(width: chip(width, black), height: chip(width, black))
+                    .frame(width: chip(white, black: black, labelled: !mark.label.isEmpty),
+                           height: chip(white, black: black, labelled: !mark.label.isEmpty))
                     .background(Circle().fill(fill))
                     .overlay(Circle().strokeBorder(mark.approx ? Theme.warn : .clear,
                                                    style: StrokeStyle(lineWidth: 1.25, dash: [2, 2])))
-                    .padding(.bottom, 6)
+                    .padding(.bottom, max(3, min(6, keyHeight * 0.08)))
             }
         }
         .frame(width: width, height: keyHeight)
@@ -106,11 +117,24 @@ enum PianoVoicing {
             let shift = rotated.first! >= 12 ? -12 : 0
             out.append((names[k], rotated.map { base + $0 + shift }))
         }
+        // Root doubled an octave up: the full, ringing triad pianists play by default.
+        out.append(("Doubled root", tones.map { base + $0 } + [base + 12]))
+        // Two hands: left root and fifth low, right hand the chord in close position above.
+        let fifth = tones.contains(7) ? 7 : tones[min(2, tones.count - 1)]
+        out.append(("Spread voicing", [base - 12, base - 12 + fifth] + tones.filter { $0 != 0 }.map { base + $0 } + [base + 12]))
         if tones.count >= 4 {
             // Left hand root + fifth (or seventh), right hand the colour tones an octave up.
             let left = [base - 12, base - 12 + (tones.contains(7) ? 7 : tones[2])]
             let right = tones.filter { $0 != 0 && $0 != 7 }.map { base + $0 }
             out.append(("Open voicing", left + right))
+            // Shell: root, 3rd and 7th only, the jazz left hand.
+            if let third = tones.first(where: { $0 == 3 || $0 == 4 }), let seventh = tones.first(where: { $0 == 10 || $0 == 11 || $0 == 9 }) {
+                out.append(("Shell voicing", [base - 12, base - 12 + seventh, base + third]))
+            }
+            // Drop 2: close position with the second voice from the top dropped an octave.
+            var close = Array(tones.prefix(4)).map { base + $0 }
+            let dropped = close.remove(at: close.count - 2) - 12
+            out.append(("Drop 2", [dropped] + close))
         }
         return out
     }
