@@ -322,7 +322,7 @@ private struct ProgressionCard: View {
                 KeyboardView(low: 53, high: 77,
                              marks: Dictionary(uniqueKeysWithValues: notes.dropFirst().map { m in
                                  (m, KeyMark(label: "", root: (m - root) % 12 == 0)) }),
-                             height: 64)
+                             height: 104)
                     .frame(height: 150, alignment: .center)
             } else if let v = voicing {
                 ChordDiagram(voicing: v, tuning: tuning, root: root, quality: quality, label: .fingers, interactive: false)

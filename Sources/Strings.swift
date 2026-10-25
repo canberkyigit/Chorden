@@ -178,6 +178,7 @@ enum Strings {
         "Keyboard": "Klavye", "Piano": "Piyano", "Equal temperament": "Eşit akort",
         "Root position": "Kök durum", "1st inversion": "1. çevrim", "2nd inversion": "2. çevrim", "3rd inversion": "3. çevrim",
         "Open voicing": "Açık diziliş", "Inversions and voicings · click a keyboard to hear it": "Çevrimler ve dizilişler · dinlemek için klavyeye tıkla",
+        "Doubled root": "Kök tekrarlı", "Spread voicing": "İki elle geniş", "Shell voicing": "Shell (kök, 3, 7)", "Drop 2": "Drop 2",
         "A piano can't play these microtones: dashed keys are the nearest note. ▶ plays the true pitches.":
             "Piyano bu mikrotonları çalamaz: kesikli tuşlar en yakın notadır. ▶ gerçek perdeleri çalar.",
         "Lydian Dominant": "Lidyen Dominant", "Altered": "Altere", "Lydian Augmented": "Lidyen Artık",

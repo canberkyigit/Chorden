@@ -299,30 +299,32 @@ enum Chords {
                            score: score + Double(minF) * 0.4)
         }
 
-        // Best shape per hand position, then drop positions that are much worse than the best overall.
-        var byPosition: [Int: Voicing] = [:]
+        // Best shape per hand position and bass string (a root on the 6th and on the 5th string at the same
+        // fret are different grips), then drop shapes that are much harder than the best overall.
+        var byPosition: [String: Voicing] = [:]
         func position(_ v: Voicing) -> Int {
             v.highestFret <= max(3, span) && v.frets.enumerated().contains { $0.element == 0 && !drones.contains($0.offset) }
                 ? 0 : v.lowestFret
         }
         for v in found.values {
-            let key = position(v)
+            let bass = v.frets.firstIndex { $0 != nil } ?? 0
+            let key = "\(position(v))|\(bass)"
             if byPosition[key].map({ v.score < $0.score }) ?? true { byPosition[key] = v }
         }
         guard let best = byPosition.values.map({ $0.score - Double($0.lowestFret) * 0.4 }).min() else { return [] }
-        var result = byPosition.values.filter { $0.score - Double($0.lowestFret) * 0.4 <= best + 3.3 }
+        var result = byPosition.values.filter { $0.score - Double($0.lowestFret) * 0.4 <= best + 5.5 }
         // Neighbouring positions often produce the same grip shifted by one fret; keep the better one.
         result.sort { position($0) < position($1) }
         var pruned: [Voicing] = []
         for v in result {
-            if let prev = pruned.last, position(v) - position(prev) == 1, isShift(prev, v) {
+            if let prev = pruned.last, position(v) - position(prev) <= 1, isShift(prev, v) {
                 if v.score < prev.score { pruned[pruned.count - 1] = v }
                 continue
             }
             pruned.append(v)
         }
         // Most common grip first, the rest up the neck.
-        pruned = Array(pruned.sorted { $0.score < $1.score }.prefix(8))
+        pruned = Array(pruned.sorted { $0.score < $1.score }.prefix(12))
         let first = pruned.removeFirst()
         return [first] + pruned.sorted { position($0) < position($1) }
     }
