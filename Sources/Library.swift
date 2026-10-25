@@ -16,10 +16,14 @@ struct SavedProgression: Codable, Identifiable, Equatable {
     var drums: String
     var beats: Int
     var swing: Bool
+    /// Backing band styles; nil in progressions saved before there was a band (they play Auto).
+    var bass: String?
+    var keys: String?
 
     func sameSettings(_ p: Prefs) -> Bool {
         bpm == p.progressionBPM && pattern == p.progressionPattern && drums == p.progressionDrums
             && beats == p.progressionBeats && swing == p.progressionSwing
+            && (bass ?? "auto") == p.progressionBass && (keys ?? "auto") == p.progressionKeys
     }
 }
 
@@ -123,6 +127,8 @@ final class Library: ObservableObject {
         s.drums = prefs.progressionDrums
         s.beats = prefs.progressionBeats
         s.swing = prefs.progressionSwing
+        s.bass = prefs.progressionBass
+        s.keys = prefs.progressionKeys
         progressions.removeAll { $0.id == s.id }
         progressions.insert(s, at: 0)
         write()
@@ -221,6 +227,8 @@ extension ProgressionPlayer {
         if DrumPattern(rawValue: s.drums) != nil { prefs.progressionDrums = s.drums }
         if [2, 4, 8].contains(s.beats) { prefs.progressionBeats = s.beats }
         prefs.progressionSwing = s.swing
+        prefs.progressionBass = BassStyle(rawValue: s.bass ?? "") == nil ? "auto" : s.bass!
+        prefs.progressionKeys = KeysStyle(rawValue: s.keys ?? "") == nil ? "auto" : s.keys!
         progression = s.progression
         prefs.progressionLength = min(max(s.progression.steps.count, Progressions.lengths.lowerBound), Progressions.lengths.upperBound)
         if was { start() }

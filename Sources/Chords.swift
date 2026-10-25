@@ -103,6 +103,80 @@ enum Chords {
         return ((root + 12) % 12, quality)
     }
 
+    // MARK: - Naming a set of notes (reverse chord finder)
+
+    /// One way to name a set of pitch classes.
+    struct Match: Hashable {
+        let root: Int
+        let quality: String
+        /// Bass pitch class when it isn't the root (slash chord), else nil.
+        let bass: Int?
+        /// Chord tones (intervals) the notes leave out: a 5th, or the root of a rootless voicing.
+        let missing: [Int]
+        /// Pitch classes that aren't in the chord at all (only when nothing names the set exactly).
+        let extra: [Int]
+        let cost: Double
+        var rootless: Bool { missing.contains(0) }
+    }
+
+    /// How a note outside a chord is written after its name: C(♯11), Am(♭13).
+    static func addedLabel(_ semitones: Int) -> String {
+        ["R", "♭9", "9", "♯9", "3", "11", "♯11", "5", "♭13", "13", "♭7", "maj7"][((semitones % 12) + 12) % 12]
+    }
+
+    /// How unusual a name is; plain triads read first, altered extensions last.
+    private static let complexity: [String: Double] = [
+        "": 0, "m": 0.1, "5": 0.2, "7": 0.8, "maj7": 0.9, "m7": 0.9, "sus4": 1.0, "dim": 1.0, "sus2": 1.1,
+        "m7♭5": 1.2, "aug": 1.2, "6": 1.3, "dim7": 1.3, "m6": 1.4, "add9": 1.4, "madd9": 1.6, "7sus4": 1.6,
+        "9": 1.7, "maj9": 1.9, "m9": 1.9, "7♯5": 1.9, "6/9": 2.0, "mMaj7": 2.0, "7♭9": 2.1, "7♯9": 2.1,
+        "m11": 2.4, "11": 2.6, "13": 2.6,
+    ]
+
+    /// Every reading of `pcs` (with `bass` the lowest sounding pitch class), best first. Names may
+    /// leave out optional tones (a 5th); four notes and up may also read as rootless voicings. A set
+    /// with no good name falls back to rootless triads and the closest chord plus one foreign note.
+    static func identify(_ pcs: Set<Int>, bass: Int?) -> [Match] {
+        let set = Set(pcs.map { (($0 % 12) + 12) % 12 })
+        guard set.count >= 2 else { return [] }
+        func readings(allowExtra: Bool, allowRootless: Bool) -> [Match] {
+            var out: [Match] = []
+            for q in qualities {
+                for root in 0..<12 {
+                    var toneOf: [Int: Int] = [:]
+                    for iv in q.intervals where toneOf[(root + iv) % 12] == nil { toneOf[(root + iv) % 12] = iv }
+                    var extra = set.filter { toneOf[$0] == nil }.sorted()
+                    // A bass from outside a full chord is a slash chord of its own (G/A, C/D).
+                    let foreignBass = bass.map { b in extra.contains(b) && set.count - extra.count >= 3 } ?? false
+                    if foreignBass { extra.removeAll { $0 == bass } }
+                    guard extra.count <= (allowExtra ? 1 : 0) else { continue }
+                    let missing = q.intervals.filter { !set.contains((root + $0) % 12) }
+                    let rootless = missing.contains(0)
+                    guard missing.allSatisfy({ q.optional.contains($0) || $0 == 0 }),
+                          !rootless || (allowRootless && set.count >= 3 && !foreignBass),
+                          set.count - extra.count >= 2 else { continue }
+                    var cost = complexity[q.id] ?? 2
+                    for iv in missing { cost += iv == 0 ? 2.5 : (iv == 7 ? 0.4 : 0.6) }
+                    cost += Double(extra.count) * 2.5
+                    var slash: Int? = nil
+                    if let b = bass, b != root, !rootless, !extra.contains(b) {
+                        slash = b
+                        switch toneOf[b] {
+                        case 3?, 4?, 7?: cost += 0.9
+                        case 9?, 10?, 11?: cost += 1.1
+                        case nil: cost += 2.2
+                        default: cost += 1.6
+                        }
+                    }
+                    out.append(Match(root: root, quality: q.id, bass: slash, missing: missing, extra: extra, cost: cost))
+                }
+            }
+            return out.sorted { $0.cost < $1.cost }
+        }
+        let exact = readings(allowExtra: false, allowRootless: set.count >= 4)
+        if let best = exact.first, best.cost < 3.5 { return exact.filter { $0.cost <= best.cost + 4 } }
+        return readings(allowExtra: true, allowRootless: true)
+    }
+
     // MARK: - Voicings
 
     struct Voicing: Hashable {

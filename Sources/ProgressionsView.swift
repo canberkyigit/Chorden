@@ -202,47 +202,64 @@ private struct LoopControls: View {
                 }
             }
         }
-        // Rhythm and drums as quiet menus, so the chord cards keep their room.
-        HStack(spacing: 8) {
-            Text(tr("Rhythm")).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim)
-                .frame(width: 110, alignment: .trailing)
-            Dropdown {
-                Text(tr(StrumPattern.allCases.first { $0.rawValue == prefs.progressionPattern }?.name ?? ""))
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text)
-            } content: {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(StrumPattern.allCases, id: \.self) { s in
-                        DropdownItem(title: tr(s.name), selected: prefs.progressionPattern == s.rawValue) {
-                            prefs.progressionPattern = s.rawValue
-                        }
-                    }
+        // Rhythm, drums and the band as quiet menus, so the chord cards keep their room.
+        let auto = player.autoStyles
+        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+            GridRow {
+                menuLabel("Rhythm").frame(width: 110, alignment: .trailing)
+                menu(StrumPattern.allCases.map { ($0.rawValue, $0.name, nil) }, selected: prefs.progressionPattern) {
+                    prefs.progressionPattern = $0
                 }
-                .frame(minWidth: 200)
-            }
-            Text(tr("Drums")).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim)
-                .padding(.leading, 10)
-            Dropdown {
-                Text(tr(DrumPattern.allCases.first { $0.rawValue == prefs.progressionDrums }?.name ?? ""))
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text)
-            } content: {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(DrumPattern.allCases, id: \.self) { d in
-                        DropdownItem(title: tr(d.name), selected: prefs.progressionDrums == d.rawValue) {
-                            prefs.progressionDrums = d.rawValue
-                        }
-                    }
+                menuLabel("Drums").padding(.leading, 10)
+                menu(DrumPattern.allCases.map { ($0.rawValue, $0.name, nil) }, selected: prefs.progressionDrums) {
+                    prefs.progressionDrums = $0
                 }
-                .frame(minWidth: 200)
+                HStack(spacing: 2) {
+                    Spacer(minLength: 10)
+                    TextChoice(title: tr("Swing"), selected: prefs.progressionSwing, size: 11) { prefs.progressionSwing.toggle() }
+                    TextChoice(title: tr("Loop"), selected: prefs.progressionLoop, size: 11) { prefs.progressionLoop.toggle() }
+                }
             }
-            Spacer(minLength: 10)
-            TextChoice(title: tr("Swing"), selected: prefs.progressionSwing, size: 11) { prefs.progressionSwing.toggle() }
-            TextChoice(title: tr("Loop"), selected: prefs.progressionLoop, size: 11) { prefs.progressionLoop.toggle() }
+            GridRow {
+                menuLabel("Bass").gridColumnAlignment(.trailing)
+                menu(BassStyle.allCases.map { ($0.rawValue, $0.name, $0 == .auto ? tr(auto.bass.name) : nil) },
+                     selected: prefs.progressionBass) {
+                    prefs.progressionBass = $0
+                    player.preloadBand()
+                }
+                menuLabel("Keys").padding(.leading, 10)
+                menu(KeysStyle.allCases.map { ($0.rawValue, $0.name, $0 == .auto ? tr(auto.keys.name) : nil) },
+                     selected: prefs.progressionKeys) {
+                    prefs.progressionKeys = $0
+                    player.preloadBand()
+                }
+            }
         }
         .padding(.top, 8)
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Theme.line.opacity(0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private func menuLabel(_ s: String) -> some View {
+        Text(tr(s)).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim)
+    }
+
+    /// A quiet dropdown of named choices; `detail` shows greyed beside an item (what Auto is playing).
+    private func menu(_ items: [(id: String, name: String, detail: String?)], selected: String,
+                      pick: @escaping (String) -> Void) -> some View {
+        Dropdown {
+            Text(tr(items.first { $0.id == selected }?.name ?? items.first?.name ?? ""))
+                .font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text)
+        } content: {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(items, id: \.id) { item in
+                    DropdownItem(title: tr(item.name), detail: item.detail, selected: selected == item.id) { pick(item.id) }
+                }
+            }
+            .frame(minWidth: 200)
+        }
     }
 
     private func label(_ s: String) -> some View {

@@ -101,7 +101,7 @@ struct SampleVoice {
     private let raw: Bool
 
     init(notes: [SampleNote], midi: Double, sampleRate: Double, delay: Int, velocity: Double, hold: Double?,
-         string: Int?, pan: Double, release: Double = 0.06, raw: Bool = false) {
+         string: Int?, pan: Double, release: Double = 0.06, raw: Bool = false, gain level: Double = 1) {
         self.raw = raw
         // With a soft layer, gentle notes use the softly played recording: a real change of tone, not just volume.
         let layered = notes.contains { $0.soft }
@@ -109,7 +109,7 @@ struct SampleVoice {
         note = pool.min { abs($0.midi - midi) < abs($1.midi - midi) }!
         step = pow(2, (midi - note.midi) / 12) * note.rate / sampleRate
         self.delay = delay
-        gain = Float(layered ? 0.65 + 0.35 * velocity : 0.3 + 0.7 * velocity) * note.level
+        gain = Float(layered ? 0.65 + 0.35 * velocity : 0.3 + 0.7 * velocity) * note.level * Float(level)
         // Softer notes are darker, as with a real pick or bow.
         let cutoff = 2500 + 9000 * velocity
         lpCoef = Float(1 - exp(-2 * Double.pi * cutoff / sampleRate))

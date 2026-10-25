@@ -52,6 +52,8 @@ struct KeyboardView: View {
     private static let softPaper = Color(nsColor: NSColor(hex: 0xB9BAC2))
     private static let litText = Color(nsColor: NSColor(hex: 0x0E6B3A))
 
+    private func chip(_ width: CGFloat, _ black: Bool) -> CGFloat { min(20, black ? max(width - 3, 15) : width - 3) }
+
     @ViewBuilder
     private func key(_ m: Int, black: Bool, width: CGFloat, keyHeight: CGFloat) -> some View {
         let mark = marks[m]
@@ -68,8 +70,11 @@ struct KeyboardView: View {
                 let text = lit ? Self.litText : black ? Self.ink : Self.paper
                 Text(mark.label)
                     .font(.system(size: mark.label.count > 2 ? 7 : (width > 22 ? 9 : 7.5), weight: .bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                     .foregroundStyle(text)
-                    .frame(width: min(20, width - 3), height: min(20, width - 3))
+                    // Narrow black keys may carry a chip a little wider than the key.
+                    .frame(width: chip(width, black), height: chip(width, black))
                     .background(Circle().fill(fill))
                     .overlay(Circle().strokeBorder(mark.approx ? Theme.warn : .clear,
                                                    style: StrokeStyle(lineWidth: 1.25, dash: [2, 2])))

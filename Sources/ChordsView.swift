@@ -61,6 +61,7 @@ private struct ChordLibrary: View {
     @ObservedObject var prefs = Prefs.shared
     @ObservedObject var app = AppState.shared
     @ObservedObject var tuner = TunerModel.shared
+    @ObservedObject var finder = ChordFinderModel.shared
     @State private var query = ""
     @State private var listening = false
     @FocusState private var searchFocused: Bool
@@ -91,6 +92,7 @@ private struct ChordLibrary: View {
                 .buttonStyle(.plain)
                 .help(tr("Play a chord and Chorden names it"))
                 Button {
+                    finder.active = false
                     let c = Progressions.randomChord()
                     prefs.chordRoot = c.root
                     prefs.chordQuality = c.quality
@@ -106,6 +108,26 @@ private struct ChordLibrary: View {
                 }
                 .buttonStyle(.plain)
                 .help(tr("Random chord"))
+                Button { finder.active.toggle() } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "hand.tap").font(.system(size: 11, weight: .medium))
+                        Text(tr("Find by notes")).font(.system(size: 12, weight: finder.active ? .semibold : .regular))
+                    }
+                    .foregroundStyle(finder.active ? Theme.text : Theme.dim)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(finder.active ? Theme.line : Theme.line.opacity(0.5), in: Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(tr("Tap notes on the neck or keyboard and Chorden names the chord"))
+                if finder.active {
+                    // Esc leaves the finder.
+                    Button("") { finder.active = false }
+                        .keyboardShortcut(.cancelAction)
+                        .opacity(0)
+                        .frame(width: 0, height: 0)
+                }
                 Spacer()
                 TextField(tr("Find chord  e.g. F♯m7"), text: $query)
                     .textFieldStyle(.plain)
@@ -117,6 +139,7 @@ private struct ChordLibrary: View {
                     .focused($searchFocused)
                     .onChange(of: query) { q in
                         if let c = Chords.parse(q) {
+                            finder.active = false
                             prefs.chordRoot = c.root
                             prefs.chordQuality = c.quality
                         }
@@ -125,117 +148,122 @@ private struct ChordLibrary: View {
             }
             .padding(.top, 14)
 
-            HStack(spacing: 0) {
-                ForEach(0..<12, id: \.self) { pc in
-                    TextChoice(title: prefs.notation.name(pc: pc), selected: root == pc, size: 13) { prefs.chordRoot = pc }
-                        .frame(maxWidth: .infinity)
+            if finder.active {
+                ChordFinderView(instrument: instrument, tuning: tuning,
+                                label: prefs.dotLabel == .intervals ? .intervals : .notes)
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(0..<12, id: \.self) { pc in
+                        TextChoice(title: prefs.notation.name(pc: pc), selected: root == pc, size: 13) { prefs.chordRoot = pc }
+                            .frame(maxWidth: .infinity)
+                    }
                 }
-            }
-            .padding(.top, 14)
+                .padding(.top, 14)
 
-            FlowLayout(spacing: 2, lineSpacing: 2) {
-                ForEach(Chords.qualities) { q in
-                    TextChoice(title: q.symbol, selected: quality.id == q.id, size: 12) { prefs.chordQuality = q.id }
-                        .help(tr(q.name))
-                }
-            }
-            .padding(.top, 8)
-
-            if !prefs.favoriteChords.isEmpty {
-                HStack(spacing: 2) {
-                    Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(Theme.warn).padding(.trailing, 4)
-                    ForEach(prefs.favoriteChords, id: \.self) { key in
-                        let parts = key.split(separator: "|", omittingEmptySubsequences: false)
-                        let r = Int(parts[0]) ?? 0, q = parts.count > 1 ? String(parts[1]) : ""
-                        TextChoice(title: ChordsView.name(r, q, prefs.notation), selected: key == prefs.chordKey, size: 12) {
-                            prefs.chordRoot = r
-                            prefs.chordQuality = q
-                        }
+                FlowLayout(spacing: 2, lineSpacing: 2) {
+                    ForEach(Chords.qualities) { q in
+                        TextChoice(title: q.symbol, selected: quality.id == q.id, size: 12) { prefs.chordQuality = q.id }
+                            .help(tr(q.name))
                     }
                 }
                 .padding(.top, 8)
-                .padding(.leading, 8)
-            }
 
-            Rectangle().fill(Theme.line).frame(height: 1).padding(.vertical, 16)
-
-            HStack(alignment: .firstTextBaseline, spacing: 14) {
-                Text(ChordsView.name(root, quality.id, prefs.notation))
-                    .font(.system(size: 30, weight: .semibold))
-                Button { prefs.toggleFavoriteChord() } label: {
-                    Image(systemName: favorite ? "star.fill" : "star")
-                        .font(.system(size: 13))
-                        .foregroundStyle(favorite ? Theme.warn : Theme.ghost)
+                if !prefs.favoriteChords.isEmpty {
+                    HStack(spacing: 2) {
+                        Image(systemName: "star.fill").font(.system(size: 9)).foregroundStyle(Theme.warn).padding(.trailing, 4)
+                        ForEach(prefs.favoriteChords, id: \.self) { key in
+                            let parts = key.split(separator: "|", omittingEmptySubsequences: false)
+                            let r = Int(parts[0]) ?? 0, q = parts.count > 1 ? String(parts[1]) : ""
+                            TextChoice(title: ChordsView.name(r, q, prefs.notation), selected: key == prefs.chordKey, size: 12) {
+                                prefs.chordRoot = r
+                                prefs.chordQuality = q
+                            }
+                        }
+                    }
+                    .padding(.top, 8)
+                    .padding(.leading, 8)
                 }
-                .buttonStyle(.plain)
-                .help(tr("Favorite"))
-                Text(tr(quality.name)).font(.system(size: 12)).foregroundStyle(Theme.dim)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 3) {
-                    Text(quality.intervals.map { prefs.notation.name(pc: root + $0) }.joined(separator: "  "))
-                        .font(.system(size: 12, weight: .medium))
-                    Text(quality.intervals.map { quality.label($0) }.joined(separator: "  "))
-                        .font(.system(size: 11)).foregroundStyle(Theme.dim)
-                }
-            }
 
-            HStack(spacing: 2) {
+                Rectangle().fill(Theme.line).frame(height: 1).padding(.vertical, 16)
+
+                HStack(alignment: .firstTextBaseline, spacing: 14) {
+                    Text(ChordsView.name(root, quality.id, prefs.notation))
+                        .font(.system(size: 30, weight: .semibold))
+                    Button { prefs.toggleFavoriteChord() } label: {
+                        Image(systemName: favorite ? "star.fill" : "star")
+                            .font(.system(size: 13))
+                            .foregroundStyle(favorite ? Theme.warn : Theme.ghost)
+                    }
+                    .buttonStyle(.plain)
+                    .help(tr("Favorite"))
+                    Text(tr(quality.name)).font(.system(size: 12)).foregroundStyle(Theme.dim)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(quality.intervals.map { prefs.notation.name(pc: root + $0) }.joined(separator: "  "))
+                            .font(.system(size: 12, weight: .medium))
+                        Text(quality.intervals.map { quality.label($0) }.joined(separator: "  "))
+                            .font(.system(size: 11)).foregroundStyle(Theme.dim)
+                    }
+                }
+
+                HStack(spacing: 2) {
+                    if instrument.isKeyboard {
+                        Text(tr("Inversions and voicings · click a keyboard to hear it"))
+                            .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.leading, 8)
+                    } else if instrument.hasChords {
+                        ForEach(ChordView.allCases, id: \.self) { v in
+                            TextChoice(title: tr(v.rawValue.capitalized), selected: prefs.chordView == v, size: 11) { prefs.chordView = v }
+                        }
+                    } else {
+                        Text(tr("Chord tones on the fingerboard"))
+                            .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.leading, 8)
+                    }
+                    Spacer()
+                    ForEach(DotLabel.allCases, id: \.self) { l in
+                        if shapes || l != .fingers {
+                            TextChoice(title: tr(l.rawValue.capitalized), selected: effectiveLabel(shapes) == l, size: 11) {
+                                prefs.dotLabel = l
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 12)
+                .padding(.horizontal, -8)
+
                 if instrument.isKeyboard {
-                    Text(tr("Inversions and voicings · click a keyboard to hear it"))
-                        .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.leading, 8)
-                } else if instrument.hasChords {
-                    ForEach(ChordView.allCases, id: \.self) { v in
-                        TextChoice(title: tr(v.rawValue.capitalized), selected: prefs.chordView == v, size: 11) { prefs.chordView = v }
+                    PianoChordsView(root: root, quality: quality, label: effectiveLabel(false))
+                } else if shapes {
+                    let list = ChordsView.voicings(root: root, quality: quality, instrument: instrument, tuning: tuning)
+                    ScrollView {
+                        if list.isEmpty {
+                            Text(tr("No playable shape in this tuning."))
+                                .font(.system(size: 12)).foregroundStyle(Theme.dim)
+                                .frame(maxWidth: .infinity).padding(.top, 40)
+                        }
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: diagramWidth(tuning) + 12), spacing: 18)],
+                                  spacing: 22) {
+                            ForEach(list, id: \.self) { v in
+                                ChordDiagram(voicing: v, tuning: tuning, root: root, quality: quality,
+                                             label: effectiveLabel(true))
+                            }
+                        }
+                        .padding(.vertical, 20)
                     }
                 } else {
-                    Text(tr("Chord tones on the fingerboard"))
-                        .font(.system(size: 11)).foregroundStyle(Theme.dim).padding(.leading, 8)
-                }
-                Spacer()
-                ForEach(DotLabel.allCases, id: \.self) { l in
-                    if shapes || l != .fingers {
-                        TextChoice(title: tr(l.rawValue.capitalized), selected: effectiveLabel(shapes) == l, size: 11) {
-                            prefs.dotLabel = l
-                        }
+                    let label = effectiveLabel(false)
+                    ScrollView {
+                        NeckView(instrument: instrument, tuning: tuning,
+                                 marks: NeckMarks.build(tuning: tuning, frets: instrument.frets > 0 ? min(instrument.frets, 15) : 12,
+                                                        fretless: instrument.frets == 0, root: root,
+                                                        tones: quality.intervals.map { iv in
+                                                            (Double(iv % 12), label == .notes ? prefs.notation.name(pc: root + iv) : quality.label(iv))
+                                                        }))
+                            .padding(.vertical, 24)
                     }
-                }
-            }
-            .padding(.top, 12)
-            .padding(.horizontal, -8)
-
-            if instrument.isKeyboard {
-                PianoChordsView(root: root, quality: quality, label: effectiveLabel(false))
-            } else if shapes {
-                let list = ChordsView.voicings(root: root, quality: quality, instrument: instrument, tuning: tuning)
-                ScrollView {
-                    if list.isEmpty {
-                        Text(tr("No playable shape in this tuning."))
-                            .font(.system(size: 12)).foregroundStyle(Theme.dim)
-                            .frame(maxWidth: .infinity).padding(.top, 40)
-                    }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: diagramWidth(tuning) + 12), spacing: 18)],
-                              spacing: 22) {
-                        ForEach(list, id: \.self) { v in
-                            ChordDiagram(voicing: v, tuning: tuning, root: root, quality: quality,
-                                         label: effectiveLabel(true))
-                        }
-                    }
-                    .padding(.vertical, 20)
-                }
-            } else {
-                let label = effectiveLabel(false)
-                ScrollView {
-                    NeckView(instrument: instrument, tuning: tuning,
-                             marks: NeckMarks.build(tuning: tuning, frets: instrument.frets > 0 ? min(instrument.frets, 15) : 12,
-                                                    fretless: instrument.frets == 0, root: root,
-                                                    tones: quality.intervals.map { iv in
-                                                        (Double(iv % 12), label == .notes ? prefs.notation.name(pc: root + iv) : quality.label(iv))
-                                                    }))
-                        .padding(.vertical, 24)
                 }
             }
         }
-        .onChange(of: app.searchRequest) { _ in searchFocused = true }
+        .onChange(of: app.searchRequest) { _ in finder.active = false; searchFocused = true }
         .onReceive(tuner.$chord) { c in
             guard listening, let c else { return }
             prefs.chordRoot = c.root
@@ -251,6 +279,7 @@ private struct ChordLibrary: View {
 
     private func toggleListening() {
         listening.toggle()
+        if listening { finder.active = false }
         tuner.chordListening = listening
         if listening { tuner.acquire("chords") } else { tuner.release("chords") }
     }
