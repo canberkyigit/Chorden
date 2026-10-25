@@ -5,11 +5,14 @@ import AVFoundation
 let root = URL(fileURLWithPath: CommandLine.arguments[1])
 let detector = PitchDetector(size: 8192)
 var table: [String: [String: Double]] = [:]
-for set in try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() where !set.hasPrefix(".") && !set.hasSuffix(".json") {
+for set in try FileManager.default.contentsOfDirectory(atPath: root.path).sorted() where !set.hasPrefix(".") {
+    // Only folders of pitched notes (named by MIDI number); skips LICENSE.md, tuning.json, metronome, drums.
+    var isDir: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: root.appendingPathComponent(set).path, isDirectory: &isDir), isDir.boolValue else { continue }
     var entries: [String: Double] = [:]
     for name in try FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent(set).path) where name.hasSuffix(".m4a") {
         let base = String(name.dropLast(4))
-        let midi = Int(base.filter(\.isNumber))!
+        guard let midi = Int(base.filter(\.isNumber)) else { continue }
         let file = try AVAudioFile(forReading: root.appendingPathComponent(set).appendingPathComponent(name))
         let rate = file.processingFormat.sampleRate
         let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length))!
@@ -34,7 +37,7 @@ for set in try FileManager.default.contentsOfDirectory(atPath: root.path).sorted
         // Only trust small, consistent offsets; anything wild is a detection problem, not tuning.
         if abs(median) < 30 { entries[base] = -(median * 10).rounded() / 10 }
     }
-    table[set] = entries
+    if !entries.isEmpty { table[set] = entries }
 }
 let data = try JSONSerialization.data(withJSONObject: table, options: [.sortedKeys, .prettyPrinted])
 try data.write(to: root.appendingPathComponent("tuning.json"))

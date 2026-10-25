@@ -1,13 +1,13 @@
 import Foundation
 
 /// A chord in a progression, relative to the key: semitones above the tonic plus a quality.
-struct ProgressionStep: Hashable {
+struct ProgressionStep: Hashable, Codable {
     let offset: Int
     let quality: String
     let numeral: String
 }
 
-struct Progression: Hashable {
+struct Progression: Hashable, Codable {
     let key: Int
     let minor: Bool
     let mood: String

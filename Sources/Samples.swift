@@ -29,7 +29,8 @@ final class SampleLibrary {
     private let queue = DispatchQueue(label: "tonic.samples", qos: .userInitiated)
     /// Measured so a strummed chord lands near −19 dB, like the modeled instruments.
     private let levels: [String: Float] = ["steel": 0.19, "nylon": 1.17, "electric": 0.28, "bass": 0.31, "violin": 0.32,
-                                           "viola": 0.39, "cello": 0.27, "contrabass": 0.36, "banjo": 0.35, "piano": 0.24]
+                                           "viola": 0.39, "cello": 0.27, "contrabass": 0.36, "banjo": 0.35, "piano": 0.24,
+                                           "baglama": 0.37, "ukulele": 0.32]
 
     private lazy var tuning: [String: [String: Double]] = {
         guard let url = Bundle.main.url(forResource: "tuning", withExtension: "json", subdirectory: "Samples"),

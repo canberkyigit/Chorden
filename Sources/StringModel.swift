@@ -28,6 +28,10 @@ struct Timbre: Equatable {
     var samples: String? = nil
     /// Bowed only: brightness of the bowed string (one-pole low-pass cutoff, Hz).
     var bowCutoff = 6000.0
+    /// Extra high-frequency loss in the string (0 = none, toward 1 = gut/nylon that loses its overtones fast):
+    /// a one-pole low-pass in the loop, beyond what `damping` can do. Set for a 220 Hz note and eased for
+    /// higher ones (they pass the filter more often per second), so every note keeps a similar ring.
+    var stringLoss = 0.0
 
     struct Mode: Equatable { let f: Double, q: Double, g: Double }
 
@@ -62,7 +66,11 @@ struct Timbre: Equatable {
                              body: [], dry: 1, reverb: 0.08, electric: true, gain: 0.55, samples: "bass")
     static let ukulele = Timbre(id: "uke", t60: 2, brightness: 0.5, damping: 0.36, pick: 0.2, course: nil,
                                 body: [], dry: 1, reverb: 0.2, gain: 0.32,
-                                resonator: Resonator(scale: 1.75, air: 0.8, highs: 0.75, top: 6000, length: 0.09))
+                                resonator: Resonator(scale: 1.75, air: 0.8, highs: 0.75, top: 6000, length: 0.09), samples: "ukulele")
+    /// The baritone sits below the recorded ukulele's range (C4 up), so it keeps the model.
+    static let baritoneUke = Timbre(id: "baritoneuke", t60: 2.2, brightness: 0.5, damping: 0.36, pick: 0.2, course: nil,
+                                    body: [], dry: 1, reverb: 0.2, gain: 0.32,
+                                    resonator: Resonator(scale: 1.55, air: 0.9, highs: 0.7, top: 6000, length: 0.1))
     static let mandolin = Timbre(id: "mandolin", t60: 1.8, brightness: 0.9, damping: 0.2, pick: 0.1, course: 2.5,
                                  body: [], dry: 1, reverb: 0.2, gain: 0.3,
                                  resonator: Resonator(scale: 1.8, air: 0.6, highs: 1.1, top: 8000, length: 0.09))
@@ -71,10 +79,12 @@ struct Timbre: Equatable {
                               dry: 0.6, reverb: 0.15, gain: 0.65, samples: "banjo")
     static let baglama = Timbre(id: "baglama", t60: 3.0, brightness: 0.85, damping: 0.2, pick: 0.11, course: 3,
                                 body: [], dry: 1, reverb: 0.24, gain: 0.27,
-                                resonator: Resonator(scale: 1.3, air: 1, highs: 1, top: 7000, length: 0.13))
-    static let oud = Timbre(id: "oud", t60: 2.4, brightness: 0.5, damping: 0.34, pick: 0.15, course: 1.5,
+                                resonator: Resonator(scale: 1.3, air: 1, highs: 1, top: 7000, length: 0.13), samples: "baglama")
+    // Fitted to real oud notes (decay and harmonic balance over the first 1.2 s): gut/nylon courses that
+    // lose their overtones fast after the bright risha attack, a deep bowl that rings a little longer.
+    static let oud = Timbre(id: "oud", t60: 3.8, brightness: 0.6, damping: 0.2, pick: 0.16, course: 1.5,
                             body: [], dry: 1, reverb: 0.28, gain: 0.3,
-                            resonator: Resonator(scale: 0.88, air: 1.4, highs: 0.6, top: 5000, length: 0.18))
+                            resonator: Resonator(scale: 0.88, air: 1, highs: 0.7, top: 5000, length: 0.24), stringLoss: 0.4)
 
     // Bowed family: violin-type body modes (air A0, the B1 pair, then the "bridge hill" formant),
     // scaled down for bigger instruments.
@@ -123,7 +133,8 @@ struct Timbre: Equatable {
         case "viola": return .viola
         case "cello": return .cello
         case "doublebass": return .doubleBass
-        case "ukulele", "baritoneuke": return .ukulele
+        case "ukulele": return .ukulele
+        case "baritoneuke": return .baritoneUke
         case "cavaquinho": return .cavaquinho
         case "balalaika": return .balalaika
         case "mandolin": return .mandolin
@@ -242,27 +253,42 @@ struct StringLoop {
     private let c: Float
     private let loss: Float
     private let s: Float
+    /// Extra one-pole low-pass in the loop (`Timbre.stringLoss`).
+    private let lpA: Float
+    private var lpY: Float = 0
     /// Commuted synthesis: the body's response to the pluck, fed into the string as it plays.
     private let input: [Float]
     private var inputIndex = 0
 
-    init(frequency: Double, sampleRate: Double, t60: Double, damping: Double, input: [Float] = [],
+    init(frequency: Double, sampleRate: Double, t60: Double, damping: Double, stringLoss: Double = 0, input: [Float] = [],
          excitation: (Int) -> [Float]) {
-        // Loop delay P = N (line) + S (loss filter) + d (all-pass), with d kept in [0.1, 1.1).
+        // The extra low-pass delays and attenuates the fundamental too: measure both there and compensate,
+        // so pitch and the fundamental's decay stay exact.
+        let w = 2 * Double.pi * frequency / sampleRate
+        let k = stringLoss / (1 - min(stringLoss, 0.95)) * (220 / frequency)
+        let a = min(0.95, k / (1 + k))
+        let lpDelay = a > 0 ? atan2(a * sin(w), 1 - a * cos(w)) / w : 0
+        let lpGain = (1 - a) / sqrt(1 - 2 * a * cos(w) + a * a)
+        // Loop delay P = N (line) + S (loss filter) + L (low-pass) + d (all-pass), with d kept in [0.1, 1.1).
         let p = sampleRate / frequency
-        let n = max(2, Int(floor(p - damping - 0.1)))
-        let d = p - damping - Double(n)
+        let n = max(2, Int(floor(p - damping - lpDelay - 0.1)))
+        let d = p - damping - lpDelay - Double(n)
         c = Float((1 - d) / (1 + d))
         s = Float(damping)
-        loss = Float(pow(0.001, 1 / (max(0.3, t60) * frequency)))
+        lpA = Float(a)
+        loss = Float(pow(0.001, 1 / (max(0.3, t60) * frequency)) / lpGain)
         self.input = input
         line = input.isEmpty ? excitation(n) : [Float](repeating: 0, count: n)
     }
 
     mutating func next() -> Float {
         let out = line[index]
-        let filtered = loss * ((1 - s) * out + s * prev)
+        var filtered = loss * ((1 - s) * out + s * prev)
         prev = out
+        if lpA > 0 {
+            lpY = (1 - lpA) * filtered + lpA * lpY
+            filtered = lpY
+        }
         var ap = c * filtered + apX - c * apY
         apX = filtered
         apY = ap
@@ -335,13 +361,13 @@ struct PluckVoice {
         let spread = (timbre.course ?? 0) / 2
         let cents = { (c: Double) in frequency * pow(2, c / 1200) }
         var loops = [
-            StringLoop(frequency: cents(-spread - 0.15), sampleRate: sampleRate, t60: t60, damping: timbre.damping, input: input, excitation: excitation),
-            StringLoop(frequency: cents(-spread + 0.2), sampleRate: sampleRate, t60: t60 * 0.45, damping: timbre.damping, input: input, excitation: excitation),
+            StringLoop(frequency: cents(-spread - 0.15), sampleRate: sampleRate, t60: t60, damping: timbre.damping, stringLoss: timbre.stringLoss, input: input, excitation: excitation),
+            StringLoop(frequency: cents(-spread + 0.2), sampleRate: sampleRate, t60: t60 * 0.45, damping: timbre.damping, stringLoss: timbre.stringLoss, input: input, excitation: excitation),
         ]
         var mix: [Float] = [0.58, 0.42]
         if timbre.course != nil {
             loops.append(StringLoop(frequency: cents(spread), sampleRate: sampleRate, t60: t60 * 0.9,
-                                    damping: timbre.damping, input: input, excitation: excitation))
+                                    damping: timbre.damping, stringLoss: timbre.stringLoss, input: input, excitation: excitation))
             mix = [0.4, 0.2, 0.6]
         }
         self.loops = loops

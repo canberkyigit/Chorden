@@ -2,9 +2,15 @@ import ServiceManagement
 import SwiftUI
 
 enum Tab: String, CaseIterable {
-    case tuner, chords, progressions, scales, metronome, sing
+    case tuner, chords, progressions, scales, metronome, sing, earquiz
 
-    var title: String { self == .sing ? "Sing & Find" : rawValue.capitalized }
+    var title: String {
+        switch self {
+        case .sing: return "Sing & Find"
+        case .earquiz: return "EarQuiz"
+        default: return rawValue.capitalized
+        }
+    }
 }
 
 final class AppState: ObservableObject {
@@ -26,11 +32,12 @@ struct MainView: View {
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
-                HStack(spacing: 4) {
-                    ForEach(Tab.allCases, id: \.self) { t in
-                        TextChoice(title: tr(t.title), selected: app.tab == t, size: 12) { app.tab = t }
-                    }
+                // Narrow windows get a tighter row, so the tabs clear the window buttons and the icons.
+                ViewThatFits(in: .horizontal) {
+                    tabs(size: 12, spacing: 4)
+                    tabs(size: 11, spacing: 0)
                 }
+                .padding(.horizontal, 80)
                 HStack(spacing: 0) {
                     Spacer()
                     // One click flips to the other look (Settings → Appearance can return to System).
@@ -62,9 +69,20 @@ struct MainView: View {
             case .scales: ScalesView()
             case .metronome: MetronomeView()
             case .sing: SingView()
+            case .earquiz: EarQuizView()
             }
         }
         .background(Theme.bg)
+    }
+}
+
+extension MainView {
+    fileprivate func tabs(size: CGFloat, spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
+            ForEach(Tab.allCases, id: \.self) { t in
+                TextChoice(title: tr(t.title), selected: app.tab == t, size: size) { app.tab = t }
+            }
+        }
     }
 }
 

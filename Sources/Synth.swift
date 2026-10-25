@@ -368,6 +368,12 @@ final class Synth {
                     self.sampled += item.sampled.map { var v = $0; v.delay += offset; return v }
                     self.voices += item.plucks.map { var v = $0; v.delay += offset; return v }
                     self.bows += item.bows.map { var v = $0; v.delay += offset; return v }
+                    // A closed hi-hat (or the hat struck again) chokes an open one still ringing.
+                    if item.drums.contains(where: { $0.kind == .hat || $0.kind == .openHat }) {
+                        for v in self.drums.indices where self.drums[v].kind == .openHat && self.drums[v].delay < offset {
+                            self.drums[v].chokeAt(offset)
+                        }
+                    }
                     self.drums += item.drums.map { var v = $0; v.delay += offset; return v }
                 }
                 self.incomingTimed.removeAll(keepingCapacity: true)
@@ -452,13 +458,18 @@ final class Synth {
                 r += wr * self.roomLevel
                 var center = self.tone.next(sr)
                 for c in self.clicks.indices { center += self.clicks[c].next() }
-                for d in self.drums.indices { center += self.drums[d].next() }
+                var dl: Float = 0, dr: Float = 0
+                for d in self.drums.indices {
+                    let x = self.drums[d].next()
+                    dl += x * self.drums[d].panL
+                    dr += x * self.drums[d].panR
+                }
                 if !self.tracks.isEmpty {
                     self.voiceGain += (self.voiceGoal - self.voiceGain) * 0.002
                     for t in self.tracks.indices { center += self.tracks[t].next() * self.voiceGain }
                 }
-                outL[i] = tanhf(l + center)
-                outR[i] = tanhf(r + center)
+                outL[i] = tanhf(l + center + dl)
+                outR[i] = tanhf(r + center + dr)
             }
             self.voices.removeAll { $0.finished }
             self.bows.removeAll { $0.finished }
@@ -494,24 +505,119 @@ final class Synth {
     }
 }
 
-enum DrumKind { case kick, snare, rim, hat, openHat, clap, shaker, ride, tom }
+enum DrumKind {
+    case kick, snare, rim, hat, openHat, clap, shaker, ride, tom
 
-/// A small synthesized kit for the progression player.
+    /// Name of its recording in Resources/Samples/drums.
+    var file: String {
+        switch self {
+        case .openHat: "openhat"
+        default: "\(self)"
+        }
+    }
+
+    /// Kick, snare and hi-hat have a soft layer, played below this velocity.
+    var softBelow: Double? {
+        switch self {
+        case .kick, .snare, .hat: 0.5
+        default: nil
+        }
+    }
+
+    /// Where it sits in the stereo picture (-1 left … 1 right), heard from the audience: hats a little right,
+    /// ride and floor tom a little left, kick, snare and hand percussion near the middle.
+    var pan: Float {
+        switch self {
+        case .kick, .clap: 0
+        case .snare, .rim: -0.05
+        case .hat, .openHat: 0.3
+        case .shaker: 0.15
+        case .ride: -0.35
+        case .tom: -0.25
+        }
+    }
+}
+
+/// The progression player's recorded kit (Resources/Samples/drums, made by tools/render_drums.swift): one-shots
+/// from a real acoustic kit, already balanced against one another, with soft layers for kick, snare and hi-hat.
+/// Decoded once, off the audio thread (the first `DrumVoice` made loads them).
+final class DrumSamples {
+    static let shared = DrumSamples()
+    /// The velocity a soft layer was recorded to stand for (see render_drums.swift).
+    static let softVelocity = 0.35
+    let rate: Double
+    private var hits: [String: [Float]] = [:]  // written only in init
+
+    private init() {
+        var rate = 48000.0
+        let dir = Bundle.main.url(forResource: "drums", withExtension: nil, subdirectory: "Samples")
+        func read(_ name: String) -> [Float]? {
+            guard let url = dir?.appendingPathComponent(name + ".wav"),
+                  let file = try? AVAudioFile(forReading: url),
+                  let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+                  (try? file.read(into: buffer)) != nil, buffer.frameLength > 0 else { return nil }
+            rate = file.processingFormat.sampleRate
+            // Trailing zeros let the interpolator read past the end.
+            return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength))) + [0, 0, 0]
+        }
+        let kinds: [DrumKind] = [.kick, .snare, .rim, .hat, .openHat, .clap, .shaker, .ride, .tom]
+        for k in kinds {
+            hits[k.file] = read(k.file)
+            if k.softBelow != nil { hits[k.file + "-soft"] = read(k.file + "-soft") }
+        }
+        self.rate = rate
+    }
+
+    /// The recording for a hit, or nil when it is missing (the synthesized drum stands in).
+    func hit(_ kind: DrumKind, soft: Bool) -> [Float]? {
+        soft ? hits[kind.file + "-soft"] ?? hits[kind.file] : hits[kind.file]
+    }
+}
+
+/// One drum hit for the progression player, started exactly on its sample: the recorded kit, or a small
+/// synthesized one when the recordings are missing (a bare dev build).
 struct DrumVoice {
     let kind: DrumKind
     private let sr: Double
     private let gain: Double
+    let panL: Float, panR: Float
     var delay = 0
     private var n = 0
     private let length: Int
     private var phase = 0.0
     private var seed: UInt32 = 0x1234_5679
     private var hpX = 0.0, hpY = 0.0
-    var finished: Bool { n >= length }
+    // Recorded hit.
+    private let data: [Float]?
+    private let step: Double
+    private var pos = 0.0
+    /// Samples until a closed hi-hat chokes this one (open hat), then a fast fade.
+    private var chokeIn: Int?
+    private var choke: Float = 1
+    var finished: Bool {
+        if delay > 0 { return false }
+        if choke < 0.001 { return true }
+        if let data { return Int(pos) + 2 >= data.count }
+        return n >= length
+    }
 
     init(kind: DrumKind, sampleRate: Double, velocity: Double) {
         self.kind = kind
         sr = sampleRate
+        panL = min(1, 1 - kind.pan)
+        panR = min(1, 1 + kind.pan)
+        let kit = DrumSamples.shared
+        let soft = kind.softBelow.map { velocity < $0 } ?? false
+        if let d = kit.hit(kind, soft: soft) {
+            data = d
+            // No two hits quite alike: a touch of variation in force and tuning, as from a drummer's hand.
+            step = kit.rate / sampleRate * Double.random(in: 0.996...1.004)
+            gain = (soft ? velocity / DrumSamples.softVelocity : velocity) * Double.random(in: 0.94...1.06)
+            length = 0
+            return
+        }
+        data = nil
+        step = 1
         let (g, len): (Double, Double) = switch kind {
         case .kick: (0.95, 0.4)
         case .snare: (0.55, 0.25)
@@ -527,13 +633,30 @@ struct DrumVoice {
         length = Int(sampleRate * len)
     }
 
+    /// Closes the hi-hat `offset` samples from now (render thread).
+    mutating func chokeAt(_ offset: Int) {
+        if chokeIn == nil || offset < chokeIn! { chokeIn = offset }
+    }
+
     private mutating func noise() -> Double {
         seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5
         return Double(seed) / Double(UInt32.max) * 2 - 1
     }
 
     mutating func next() -> Float {
+        if let c = chokeIn {
+            if c > 0 { chokeIn = c - 1 } else { choke *= 0.9985 }  // ~14 ms to close (at 48 kHz)
+        }
         if delay > 0 { delay -= 1; return 0 }
+        if let data {
+            let i = Int(pos)
+            guard i + 2 < data.count else { return 0 }
+            let t = Float(pos - Double(i))
+            let y0 = i > 0 ? data[i - 1] : 0, y1 = data[i], y2 = data[i + 1], y3 = data[i + 2]
+            let s = y1 + 0.5 * t * (y2 - y0 + t * (2 * y0 - 5 * y1 + 4 * y2 - y3 + t * (3 * (y1 - y2) + y3 - y0)))
+            pos += step
+            return s * Float(gain) * choke
+        }
         let t = Double(n) / sr
         n += 1
         let v: Double
@@ -576,7 +699,7 @@ struct DrumVoice {
             phase += f / sr
             v = sin(2 * .pi * phase) * exp(-t / 0.25)
         }
-        return Float(v * gain)
+        return Float(v * gain) * choke
     }
 }
 

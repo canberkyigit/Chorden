@@ -3,7 +3,7 @@ import Combine
 import Foundation
 
 /// A sung note after segmentation.
-struct SungNote: Equatable {
+struct SungNote: Equatable, Codable {
     let midi: Int
     let start: Double
     let end: Double
@@ -24,7 +24,7 @@ struct SungNote: Equatable {
     }
 }
 
-struct SongKey: Equatable {
+struct SongKey: Equatable, Codable {
     let root: Int
     let minor: Bool
     /// 0…1: how clearly the notes point to this key rather than the runner-up.
@@ -35,7 +35,7 @@ struct SongKey: Equatable {
 
 /// A chord suggestion for one bar (or half bar), with runners-up.
 struct ChordSlot: Equatable {
-    struct Option: Equatable {
+    struct Option: Equatable, Codable {
         let root: Int
         let quality: String
         let numeral: String
@@ -513,6 +513,9 @@ final class SingModel: ObservableObject {
     @Published private(set) var tuning = 0.0
     /// Semitones the chords (and melody) are moved for display, playback and export.
     @Published private(set) var transpose = 0
+    /// The saved take on screen (nil: not saved), and whether it was changed since.
+    @Published private(set) var takeID: UUID?
+    @Published private(set) var changed = false
 
     private let tuner = TunerModel.shared
     private let prefs = Prefs.shared
@@ -542,6 +545,8 @@ final class SingModel: ObservableObject {
     private var playTimer: Timer?
     /// Chords the user picked by hand, by slot, kept across re-harmonizing.
     private var overrides: [Int: ChordSlot.Option] = [:]
+    /// Chord settings the slots were last cut with; a settings change re-harmonizes only if they differ.
+    private var harmonizedWith: (every: Int, style: Int)?
 
     /// Beats per chord: a bar, or half a bar.
     var beatsPerSlot: Double { Double(prefs.beatsPerBar) / (prefs.singChordEvery == 2 ? 2 : 1) }
@@ -552,8 +557,8 @@ final class SingModel: ObservableObject {
         Prefs.shared.$singPlayVoice.sink { [weak self] on in Synth.shared.setVoiceEnabled(on && (self?.transpose ?? 0) == 0) }
             .store(in: &subs)
         // Settings that change how bars are cut or which chords are used re-harmonize at once.
-        Prefs.shared.$singChordEvery.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.rebuild() } }.store(in: &subs)
-        Prefs.shared.$singChords.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.rebuild() } }.store(in: &subs)
+        Prefs.shared.$singChordEvery.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.settingsChanged() } }.store(in: &subs)
+        Prefs.shared.$singChords.dropFirst().sink { [weak self] _ in DispatchQueue.main.async { self?.settingsChanged() } }.store(in: &subs)
     }
 
     func toggle() { recording || countIn != nil ? stop() : startRecording() }
@@ -673,11 +678,14 @@ final class SingModel: ObservableObject {
         tuning = 0
         grid = BeatGrid()
         bounds = []
+        takeID = nil
+        changed = false
     }
 
     #if SNAPSHOT
     /// Offline test hook: run a take from analysis frames (with `time` set) without the microphone.
-    func simulate(_ frames: [Analyzer.Output], clicked: Bool = false, tempo: Double? = nil, shift: Int = 0) {
+    func simulate(_ frames: [Analyzer.Output], clicked: Bool = false, tempo: Double? = nil, shift: Int = 0,
+                  voice audio: [Float]? = nil, rate: Double = 48000) {
         reset()
         self.clicked = clicked
         self.tempo = tempo
@@ -687,6 +695,7 @@ final class SingModel: ObservableObject {
         closeNote(at: lastTime + 0.02)
         recording = false
         elapsed = frames.last?.time ?? 0
+        voice = audio.flatMap { Self.clean($0, rate: rate) }.map { SampleNote(midi: 0, data: $0, rate: rate, level: 1) }
         refresh()
     }
     #endif
@@ -701,6 +710,7 @@ final class SingModel: ObservableObject {
         guard slots.indices.contains(slot), slots[slot].options.indices.contains(option) else { return }
         slots[slot].chosen = option
         overrides[slot] = slots[slot].options[option]
+        changed = true
         let c = shifted(slots[slot].chord)
         ChordsView.play(root: c.root, quality: Chords.quality(c.quality), instrument: prefs.instrument,
                         tuning: prefs.tuning, a4: prefs.a4)
@@ -776,6 +786,7 @@ final class SingModel: ObservableObject {
 
     /// Re-harmonizes from scratch, so a key or beat that becomes clearer later fixes the earlier bars too.
     func refresh() {
+        harmonizedWith = (prefs.singChordEvery, prefs.singChords)
         guard let first = raw.first else { return }
         tuning = Harmonizer.tuning(raw)
         notes = raw.map { $0.retuned(tuning) }
@@ -819,7 +830,13 @@ final class SingModel: ObservableObject {
     /// Re-cuts the slots from scratch: hand-picked chords belonged to the old ones.
     private func rebuild() {
         overrides = [:]
+        changed = true
         refresh()
+    }
+
+    private func settingsChanged() {
+        if let h = harmonizedWith, h == (prefs.singChordEvery, prefs.singChords) { return }
+        rebuild()
     }
 
     /// Chord boundaries in seconds: every `perSlot` beats from bar 1, which starts `shift` beats in (the
@@ -874,6 +891,7 @@ final class SingModel: ObservableObject {
 
     func setTranspose(_ semitones: Int) {
         transpose = min(6, max(-6, semitones))
+        changed = true
         // The recorded voice can't follow a key change, so it sits out while transposed.
         Synth.shared.setVoiceEnabled(prefs.singPlayVoice && transpose == 0)
     }
@@ -961,6 +979,54 @@ final class SingModel: ObservableObject {
             Synth.shared.keepAlive = false
         }
         playing = nil
+    }
+
+    // MARK: Saving
+
+    /// Keeps the take: its notes, voice and every choice made on it. Saving again updates it.
+    func saveTake() {
+        guard !raw.isEmpty, !recording else { return }
+        let id = takeID ?? UUID()
+        let take = SavedTake(id: id, notes: raw, length: elapsed, clicked: clicked, tempo: tempo, tempoSet: tempoSet,
+                             estimate: estimate, beats: grid.beats, shift: shift, keyChoice: keyChoice, key: foundKey,
+                             transpose: transpose, picks: overrides, beatsPerBar: prefs.beatsPerBar,
+                             chordEvery: prefs.singChordEvery, chordStyle: prefs.singChords)
+        Library.shared.save(take, voice: voice)
+        takeID = id
+        changed = false
+    }
+
+    /// Brings a saved take back as it was: chords, bars, choices and the voice. No microphone needed.
+    func open(_ t: SavedTake) {
+        stop()
+        stopPlayback()
+        reset()
+        prefs.beatsPerBar = max(1, t.beatsPerBar)
+        prefs.singChordEvery = t.chordEvery
+        prefs.singChords = t.chordStyle
+        raw = t.notes
+        elapsed = t.length
+        clicked = t.clicked
+        tempo = t.tempo
+        tempoSet = t.tempoSet
+        estimate = t.estimate
+        shift = t.shift
+        keyChoice = t.keyChoice
+        overrides = t.picks
+        if !t.clicked, !t.beats.isEmpty, let bpm = t.tempoSet ? t.tempo : t.estimate {
+            tracked = (t.notes.count, bpm, t.beats)
+        }
+        voice = Library.shared.voice(of: t)
+        setTranspose(t.transpose)
+        refresh()
+        takeID = t.id
+        changed = false
+    }
+
+    /// The saved take on screen was deleted.
+    func forgetSaved() {
+        takeID = nil
+        changed = false
     }
 
     // MARK: Sharing
