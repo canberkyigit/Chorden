@@ -1,8 +1,9 @@
 // Renders Chorden's instrument samples from a General MIDI SoundFont.
 // Usage: swift tools/render_samples.swift <MuseScore_General.sf2> <out dir>
 //
-// Each instrument is played note by note through Apple's sampler in offline mode, every third
-// semitone across its range, and saved as mono AAC. Chorden pitch-shifts between these roots.
+// Each instrument is played note by note through Apple's sampler in offline mode, every second semitone across
+// its range (the acoustic guitar every note), hard and soft, and saved as mono AAC. Chorden pitch-shifts a note
+// by at most a semitone from its nearest recording, and gentle playing uses the soft recordings.
 import AVFoundation
 
 struct SampleSet {
@@ -12,9 +13,9 @@ struct SampleSet {
     /// Seconds the key is held, then seconds of release that are kept.
     let hold: Double, tail: Double
     /// Semitones between recorded notes (1 = every note, no pitch shifting at all).
-    var step = 3
+    var step = 2
     /// Velocity layers: (MIDI velocity, file suffix). A soft layer is saved as e.g. "60s.m4a".
-    var layers: [(UInt8, String)] = [(112, "")]
+    var layers: [(UInt8, String)] = [(112, ""), (64, "s")]
 }
 
 let sets = [

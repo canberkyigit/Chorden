@@ -95,6 +95,11 @@ final class TunerModel: ObservableObject {
             .dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.lockedString = nil; self?.pushConfig() } }
             .store(in: &bag)
+        // Fine-tuning a makam's degrees or picking a temperament only moves the targets.
+        prefs.$makamOffsets.combineLatest(prefs.$temperament, prefs.$temperamentKey)
+            .dropFirst()
+            .sink { [weak self] _ in DispatchQueue.main.async { self?.pushConfig(); self?.updateTone() } }
+            .store(in: &bag)
         prefs.$a4.combineLatest(prefs.$tolerance, prefs.$gate, prefs.$inputChannel)
             .dropFirst()
             .sink { [weak self] _ in DispatchQueue.main.async { self?.pushConfig(); self?.updateTone() } }
@@ -108,8 +113,20 @@ final class TunerModel: ObservableObject {
     /// Instrument strings as MIDI notes (empty outside instrument mode).
     var strings: [Int] { prefs.targetMode == .instrument ? prefs.tuning.notes : [] }
 
-    /// Makam degrees above the karar, in semitones (empty outside makam mode).
-    var makamDegrees: [Double] { prefs.targetMode == .makam ? Scales.scale(prefs.makamID).degrees : [] }
+    /// Makam degrees above the karar, in semitones, with the player's performance pitches (empty outside makam mode).
+    var makamDegrees: [Double] {
+        guard prefs.targetMode == .makam else { return [] }
+        let degrees = Scales.scale(prefs.makamID).degrees
+        let offsets = prefs.makamOffsets[prefs.makamID] ?? []
+        return degrees.indices.map { degrees[$0] + ($0 < offsets.count ? offsets[$0] : 0) / 100 }
+    }
+
+    /// Chromatic and piano tuning follow the chosen temperament: per pitch class, semitones off equal temperament.
+    private var temper: [Double] {
+        guard !singing, !intonationActive, prefs.temperament != .equal,
+              prefs.targetMode == .chromatic || (prefs.targetMode == .instrument && prefs.instrument.isKeyboard) else { return [] }
+        return prefs.temperament.offsets(key: prefs.temperamentKey).map { $0 / 100 }
+    }
 
     /// Every pitch the tuner may lock onto, with the string/degree it belongs to.
     private var targetSet: (pitches: [Double], labels: [Int]) {
@@ -118,8 +135,8 @@ final class TunerModel: ObservableObject {
         case .chromatic:
             return ([], [])
         case .instrument:
-            let notes = prefs.tuning.notes
-            return (notes.map(Double.init), Array(notes.indices))
+            let tuning = prefs.tuning
+            return (tuning.pitches, Array(tuning.notes.indices))
         case .makam:
             var p: [Double] = [], l: [Int] = []
             for octave in 1...8 {
@@ -137,9 +154,9 @@ final class TunerModel: ObservableObject {
         let mode: Analyzer.Mode = chordListening ? .chord
             : (polyActive && !clients.contains("popover") && prefs.targetMode == .instrument ? .poly : .single)
         let c = Analyzer.Config(mode: mode, targets: t.pitches, labels: t.labels,
-                                strings: prefs.tuning.notes.map(Double.init), a4: prefs.a4,
+                                strings: prefs.tuning.pitches, a4: prefs.a4,
                                 tolerance: prefs.tolerance, gate: prefs.gate, channel: prefs.inputChannel,
-                                locked: lockedString, makam: prefs.targetMode == .makam, voice: singing)
+                                locked: lockedString, makam: prefs.targetMode == .makam, voice: singing, temper: temper)
         config.withLock { $0 = c }
     }
 
@@ -268,10 +285,15 @@ final class TunerModel: ObservableObject {
         let pitch: Double
         switch prefs.targetMode {
         case .chromatic:
-            pitch = Double(reading.target ?? 69)
+            pitch = reading.target == nil ? 69 : reading.targetPitch
         case .instrument:
-            let s = strings
-            pitch = Double(activeString.map { s[min($0, s.count - 1)] } ?? s.first ?? 69)
+            // Each string at its own pitch, sweetened offsets included; the piano at the note being played.
+            let s = prefs.tuning.pitches
+            if s.isEmpty {
+                pitch = reading.target == nil ? 69 : reading.targetPitch
+            } else {
+                pitch = activeString.map { s[min($0, s.count - 1)] } ?? s[0]
+            }
         case .makam:
             // The locked degree in the octave around middle C, else the last heard degree.
             if let d = lockedString, d < makamDegrees.count {
@@ -348,6 +370,8 @@ final class Analyzer {
         var makam = false
         /// Singing: search only the human voice range, which avoids octave slips.
         var voice = false
+        /// Chromatic targets in a temperament: per pitch class, semitones off equal temperament (empty = equal).
+        var temper: [Double] = []
     }
 
     struct Output {
@@ -478,7 +502,12 @@ final class Analyzer {
 
             let targetPitch: Double
             var label: Int? = nil
-            if cfg.targets.isEmpty {
+            if cfg.targets.isEmpty && cfg.temper.count == 12 {
+                // The nearest note as the temperament tunes it.
+                let n = Int(median.rounded())
+                targetPitch = (n - 1...n + 1).map { Double($0) + cfg.temper[(($0 % 12) + 12) % 12] }
+                    .min { abs($0 - median) < abs($1 - median) }!
+            } else if cfg.targets.isEmpty {
                 targetPitch = median.rounded()
             } else {
                 let i = closestTarget(median, cfg)

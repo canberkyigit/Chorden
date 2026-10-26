@@ -29,7 +29,7 @@ Regenerate with `tools/render_samples.swift` and `tools/tune_samples.swift`.
 
 The metronome hits in `metronome/` (except the synthesized beep) come from the same SoundFont's GM percussion kit; regenerate with `tools/render_metronome.swift`.
 
-The progression player's drum kit in `drums/` is one-shots from the same SoundFont's GM percussion kit ("Standard"); regenerate with `tools/render_drums.swift`.
+The progression player's drum kit in `drums/` (including the crash cymbal and the three toms used for fills) is one-shots from the same SoundFont's GM percussion kit ("Standard"); regenerate with `tools/render_drums.swift`.
 
 ## Bağlama (`baglama/`)
 

@@ -10,6 +10,8 @@ struct NeckMark: Hashable {
     /// Microtonal pitch shown at the nearest fret of a fretted (12-TET) instrument.
     let approx: Bool
     let midi: Double
+    /// Drawn in the background (a scale's other notes around the chord tones).
+    var faint = false
 }
 
 enum NeckMarks {
@@ -113,7 +115,7 @@ struct NeckView: View {
                     let row = n - 1 - m.string
                     let dim = focus.map { !$0.contains(Int(m.position.rounded())) } ?? false
                     let lit = active.map { $0.string == m.string && abs($0.midi - m.midi) < 0.001 } ?? false
-                    NeckDot(text: m.label, root: m.root, open: m.position == 0, approx: m.approx, lit: lit)
+                    NeckDot(text: m.label, root: m.root, open: m.position == 0, approx: m.approx, lit: lit, faint: m.faint)
                         // The colour changes on the beat; only the size eases.
                         .transaction { $0.animation = nil }
                         .scaleEffect(lit ? 1.3 : 1)
@@ -186,8 +188,22 @@ private struct NeckDot: View {
     let open: Bool
     var approx = false
     var lit = false
+    var faint = false
 
     var body: some View {
+        if faint && !lit {
+            Text(text)
+                .font(.system(size: 7.5, weight: .semibold))
+                .foregroundStyle(Theme.dim)
+                .frame(width: 16, height: 16)
+                .background(Circle().strokeBorder(Theme.faint, lineWidth: 1))
+                .contentShape(Circle())
+        } else {
+            dot
+        }
+    }
+
+    private var dot: some View {
         Text(text)
             .font(.system(size: text.count > 2 ? 7.5 : 9, weight: .bold))
             .foregroundStyle(lit || root ? Color(nsColor: Theme.windowBG) : Theme.text)

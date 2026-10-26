@@ -119,6 +119,10 @@ struct ProgressionsView: View {
                 }
             }
 
+            if prefs.progressionGuide, let p = player.progression {
+                SoloGuide(progression: p, instrument: instrument, tuning: tuning)
+                    .padding(.bottom, 12)
+            }
             LoopControls()
                 .padding(.bottom, 16)
         }
@@ -234,6 +238,9 @@ private struct LoopControls: View {
                     Spacer(minLength: 10)
                     TextChoice(title: tr("Swing"), selected: prefs.progressionSwing, size: 11) { prefs.progressionSwing.toggle() }
                     TextChoice(title: tr("Loop"), selected: prefs.progressionLoop, size: 11) { prefs.progressionLoop.toggle() }
+                        .help(tr("Off: play once and end on the first chord"))
+                    TextChoice(title: tr("Count-in"), selected: prefs.progressionCountIn, size: 11) { prefs.progressionCountIn.toggle() }
+                        .help(tr("One bar of sticks before the loop starts"))
                 }
             }
             GridRow {
@@ -248,6 +255,20 @@ private struct LoopControls: View {
                      selected: prefs.progressionKeys) {
                     prefs.progressionKeys = $0
                     player.preloadBand()
+                }
+                HStack(spacing: 2) {
+                    Spacer(minLength: 10)
+                    TextChoice(title: tr("Solo guide"), selected: prefs.progressionGuide, size: 11) { prefs.progressionGuide.toggle() }
+                        .help(tr("Show the notes to improvise with over the chord that's playing"))
+                    Dropdown(chevron: false) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "slider.horizontal.3").font(.system(size: 10))
+                            Text(tr("Mixer")).font(.system(size: 11))
+                        }
+                        .foregroundStyle(prefs.progressionMuted.isEmpty && prefs.progressionLevels.values.allSatisfy { $0 == 1 }
+                                         ? Theme.dim : Theme.text)
+                    } content: { MixerView() }
+                    .help(tr("Level of each part of the band"))
                 }
             }
         }
@@ -477,5 +498,145 @@ private struct ChordPalette: View {
             ChordsView.play(root: root, quality: Chords.quality(quality), instrument: prefs.instrument,
                             tuning: prefs.tuning, a4: prefs.a4)
         }
+    }
+}
+
+/// The band's levels while the loop plays: the chosen instrument, bass, keys and drums, each with a mute.
+private struct MixerView: View {
+    @ObservedObject var prefs = Prefs.shared
+    @ObservedObject var player = ProgressionPlayer.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                ForEach(ProgressionPlayer.parts, id: \.self) { part in
+                    let muted = prefs.progressionMuted.contains(part)
+                    let level = prefs.progressionLevels[part] ?? 1
+                    GridRow {
+                        Text(title(part)).font(.system(size: 12)).foregroundStyle(Theme.dim)
+                            .gridColumnAlignment(.trailing)
+                        Button {
+                            if muted { prefs.progressionMuted.remove(part) } else { prefs.progressionMuted.insert(part) }
+                            player.applyMix()
+                        } label: {
+                            Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2")
+                                .font(.system(size: 11))
+                                .foregroundStyle(muted ? Theme.off : Theme.dim)
+                                .frame(width: 22, height: 20)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(muted ? tr("Unmute") : tr("Mute"))
+                        Slider(value: Binding(get: { level }, set: { prefs.progressionLevels[part] = $0; player.applyMix() }),
+                               in: 0...1.5)
+                            .frame(width: 170)
+                            .tint(Theme.dim)
+                            .disabled(muted)
+                            .opacity(muted ? 0.4 : 1)
+                        Text(muted ? tr("off") : decibels(level))
+                            .font(.system(size: 11).monospacedDigit())
+                            .foregroundStyle(Theme.dim)
+                            .frame(width: 52, alignment: .leading)
+                    }
+                }
+            }
+            HStack {
+                Text(tr("Applies while the loop plays.")).font(.system(size: 10.5)).foregroundStyle(Theme.ghost)
+                Spacer()
+                TextChoice(title: tr("Reset"), selected: false, size: 11) {
+                    prefs.progressionLevels = [:]
+                    prefs.progressionMuted = []
+                    player.applyMix()
+                }
+            }
+        }
+        .padding(14)
+        .frame(width: 330)
+    }
+
+    private func title(_ part: String) -> String {
+        switch part {
+        case "instrument": tr(prefs.instrument.name)
+        case "bass": tr("Bass")
+        case "keys": tr("Keys")
+        default: tr("Drums")
+        }
+    }
+
+    private func decibels(_ v: Double) -> String {
+        v <= 0.001 ? "−∞ dB" : String(format: "%+.1f dB", 20 * log10(v)).replacingOccurrences(of: "-", with: "−")
+    }
+}
+
+/// Solo guide: the chord under the playhead on the neck (or keyboard), its tones named and strong, and the scale
+/// to improvise with around them, faint. Follows the loop as it plays.
+private struct SoloGuide: View {
+    let progression: Progression
+    let instrument: Instrument
+    let tuning: Tuning
+    @ObservedObject var player = ProgressionPlayer.shared
+    @ObservedObject var prefs = Prefs.shared
+
+    var body: some View {
+        let p = progression
+        let i = min(player.chord ?? 0, p.steps.count - 1)
+        let root = p.root(i)
+        let quality = Chords.quality(p.steps[i].quality)
+        let solo = Progressions.soloScale(p, at: i)
+        let next = (i + 1) % p.steps.count
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(ChordsView.name(root, quality.id, prefs.notation)).font(.system(size: 15, weight: .semibold))
+                Text(prefs.notation.name(pc: solo.root) + " " + tr(solo.scale.name))
+                    .font(.system(size: 12)).foregroundStyle(Theme.dim)
+                Spacer()
+                Text(trf("next: %@", ChordsView.name(p.root(next), p.steps[next].quality, prefs.notation)))
+                    .font(.system(size: 11)).foregroundStyle(Theme.ghost)
+                Text(tr("Named: chord tones · faint: the rest of the scale"))
+                    .font(.system(size: 11)).foregroundStyle(Theme.ghost)
+            }
+            if instrument.isKeyboard {
+                KeyboardView(low: 48, high: 84, marks: keyMarks(root, quality, solo), height: 84)
+            } else {
+                NeckView(instrument: instrument, tuning: tuning, marks: neckMarks(root, quality, solo), rowH: 22)
+            }
+        }
+    }
+
+    /// Every scale note as an offset from the chord's root, labelled: chord tones by interval, the rest by name.
+    private func tones(_ root: Int, _ quality: ChordQuality, _ solo: (root: Int, scale: Scale))
+        -> [(offset: Double, label: String, chord: Bool)] {
+        solo.scale.degrees.map { d in
+            let pc = (solo.root + Int(d)) % 12
+            let offset = ((pc - root) % 12 + 12) % 12
+            if let iv = quality.intervals.first(where: { $0 % 12 == offset }) {
+                return (Double(offset), quality.label(iv), true)
+            }
+            return (Double(offset), prefs.notation.name(pc: pc), false)
+        }
+    }
+
+    private func neckMarks(_ root: Int, _ quality: ChordQuality, _ solo: (root: Int, scale: Scale)) -> [NeckMark] {
+        let list = tones(root, quality, solo)
+        let fretless = instrument.frets == 0
+        let chordOffsets = Set(list.filter(\.chord).map { Int($0.offset) })
+        return NeckMarks.build(tuning: tuning, frets: fretless ? 12 : min(instrument.frets, 15), fretless: fretless, root: root,
+                               tones: list.map { ($0.offset, $0.label) })
+            .map { m in
+                var m = m
+                m.faint = !chordOffsets.contains((((Int(m.midi.rounded()) - root) % 12) + 12) % 12)
+                return m
+            }
+    }
+
+    private func keyMarks(_ root: Int, _ quality: ChordQuality, _ solo: (root: Int, scale: Scale)) -> [Int: KeyMark] {
+        var out: [Int: KeyMark] = [:]
+        let list = tones(root, quality, solo)
+        for m in 48...84 {
+            let offset = ((m - root) % 12 + 12) % 12
+            guard let t = list.first(where: { Int($0.offset) == offset }) else { continue }
+            out[m] = KeyMark(label: t.chord ? t.label : "", root: offset == 0)
+        }
+        return out
     }
 }

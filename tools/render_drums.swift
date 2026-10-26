@@ -160,8 +160,8 @@ func centroid(_ x: [Float]) -> Double {
 /// Loudness of each drum struck hard (velocity 1 in the app), in phon. Kick and snare lead; rim and clap sit
 /// just under them; toms a little under; cymbals and shaker well below, as a drummer balances a kit.
 let level: [String: Double] = [
-    "kick": 87, "snare": 91, "rim": 85, "clap": 86, "tom": 85,
-    "hat": 81, "openhat": 82, "ride": 81, "shaker": 74,
+    "kick": 87, "snare": 91, "rim": 85, "clap": 86, "tom": 85, "tommid": 85, "tomhigh": 84,
+    "hat": 81, "openhat": 82, "ride": 81, "crash": 83, "shaker": 74,
 ]
 
 /// The loudest a hit may peak, leaving the mixer room for the chord on top of it.
@@ -202,6 +202,10 @@ hits.append(("clap", scaled(trim(try strike(39), fadeAt: 0.4, fade: 0.1), to: le
 hits.append(("shaker", scaled(trim(try strike(70), fadeAt: 0.15, fade: 0.04), to: level["shaker"]!)))
 hits.append(("tom", scaled(trim(try strike(45), fadeAt: 0.8, fade: 0.25), to: level["tom"]!)))
 hits.append(("ride", scaled(trim(try strike(51, seconds: 3), fadeAt: 1.6, fade: 0.6), to: level["ride"]!)))
+// For fills and the top of the loop: low-mid tom (GM 47), high tom (GM 50) and crash cymbal (GM 49).
+hits.append(("tommid", scaled(trim(try strike(47), fadeAt: 0.7, fade: 0.25), to: level["tommid"]!)))
+hits.append(("tomhigh", scaled(trim(try strike(50), fadeAt: 0.6, fade: 0.2), to: level["tomhigh"]!)))
+hits.append(("crash", scaled(trim(try strike(49, seconds: 4), fadeAt: 2.6, fade: 1.0), to: level["crash"]!)))
 
 try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
 let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 1)!
