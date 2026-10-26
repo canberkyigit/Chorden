@@ -50,6 +50,8 @@ struct NeckView: View {
     var onTap: ((Int, Int) -> Void)? = nil
     /// Space between strings; the chord finder uses roomier rows as tap targets.
     var rowH: CGFloat = 26
+    /// A string drawn stronger (the one a question asks about).
+    var highlight: Int? = nil
     @ObservedObject var prefs = Prefs.shared
     @State private var hover: (string: Int, fret: Int)?
 
@@ -62,6 +64,12 @@ struct NeckView: View {
         GeometryReader { geo in
             // Room on the right so dots at the last position aren't clipped.
             let xs = fretXs(width: geo.size.width - openW - 14)
+            // Everything is laid out right-handed (nut on the left); a left-handed neck mirrors each x.
+            let width = geo.size.width
+            let mx = { (x: CGFloat) in prefs.leftHanded ? width - x : x }
+            let span = { (x0: CGFloat, x1: CGFloat, y: CGFloat, h: CGFloat) -> CGRect in
+                CGRect(x: min(mx(x0), mx(x1)), y: y, width: abs(x1 - x0), height: h)
+            }
             ZStack(alignment: .topLeading) {
                 Canvas { ctx, size in
                     let top: CGFloat = 8
@@ -69,33 +77,34 @@ struct NeckView: View {
                     if let f = focus {
                         let x0 = f.lowerBound == 0 ? 0 : openW + xs[max(0, f.lowerBound - 1)]
                         let x1 = openW + xs[min(count, f.upperBound)]
-                        ctx.fill(Path(roundedRect: CGRect(x: x0, y: top - 12, width: x1 - x0, height: height + 24), cornerRadius: 8),
+                        ctx.fill(Path(roundedRect: span(x0, x1, top - 12, height + 24), cornerRadius: 8),
                                  with: .color(Theme.line.opacity(0.35)))
                     }
                     // Frets (or faint semitone guides on fretless instruments).
                     for i in 0...count {
                         let x = openW + xs[i]
                         let w: CGFloat = i == 0 ? 3 : 1
-                        ctx.fill(Path(CGRect(x: x - w / 2, y: top, width: w, height: height)),
+                        ctx.fill(Path(span(x - w / 2, x + w / 2, top, height)),
                                  with: .color(i == 0 ? Theme.text : (fretted ? Theme.faint : Theme.line.opacity(0.6))))
                     }
                     // Strings: highest pitch on top, as in tab.
                     for row in 0..<n {
                         let y = top + CGFloat(row) * rowH
-                        ctx.fill(Path(CGRect(x: openW, y: y - 0.5, width: size.width - openW, height: 1)),
-                                 with: .color(Theme.faint))
+                        let lit = highlight == n - 1 - row
+                        ctx.fill(Path(span(openW, size.width, y - (lit ? 1 : 0.5), lit ? 2 : 1)),
+                                 with: .color(lit ? Theme.good : Theme.faint))
                     }
                     for i in [3, 5, 7, 9, 12, 15] where i <= count {
                         let x = openW + (xs[i - 1] + xs[i]) / 2
                         ctx.draw(Text("\(i)").font(.system(size: 9, weight: .medium)).foregroundColor(Theme.ghost),
-                                 at: CGPoint(x: x, y: top + height + 16))
+                                 at: CGPoint(x: mx(x), y: top + height + 16))
                     }
                     for s in muted where s < n {
                         ctx.draw(Text("×").font(.system(size: 13)).foregroundColor(Theme.ghost),
-                                 at: CGPoint(x: openW / 2, y: top + CGFloat(n - 1 - s) * rowH))
+                                 at: CGPoint(x: mx(openW / 2), y: top + CGFloat(n - 1 - s) * rowH))
                     }
                     if let h = hover, !marks.contains(where: { $0.string == h.string && Int($0.position.rounded()) == h.fret }) {
-                        let c = CGPoint(x: x(Double(h.fret), xs), y: top + CGFloat(n - 1 - h.string) * rowH)
+                        let c = CGPoint(x: mx(x(Double(h.fret), xs)), y: top + CGFloat(n - 1 - h.string) * rowH)
                         ctx.stroke(Path(ellipseIn: CGRect(x: c.x - 10, y: c.y - 10, width: 20, height: 20)),
                                    with: .color(Theme.dim.opacity(0.6)), lineWidth: 1)
                     }
@@ -109,7 +118,7 @@ struct NeckView: View {
                         .transaction { $0.animation = nil }
                         .scaleEffect(lit ? 1.3 : 1)
                         .animation(.spring(response: 0.18, dampingFraction: 0.6), value: lit)
-                        .position(x: x(m.position, xs), y: 8 + CGFloat(row) * rowH)
+                        .position(x: mx(x(m.position, xs)), y: 8 + CGFloat(row) * rowH)
                         .opacity(dim && !lit ? 0.22 : 1)
                         .zIndex(lit ? 1 : 0)
                         .onTapGesture { Synth.shared.pluck(Music.frequency(midi: m.midi, a4: prefs.a4)) }
@@ -120,11 +129,11 @@ struct NeckView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(SpatialTapGesture().onEnded { e in
-                            let p = spot(e.location, xs, n)
+                            let p = spot(CGPoint(x: mx(e.location.x), y: e.location.y), xs, n)
                             onTap(p.string, p.fret)
                         })
                         .onContinuousHover { phase in
-                            if case .active(let loc) = phase { hover = spot(loc, xs, n) } else { hover = nil }
+                            if case .active(let loc) = phase { hover = spot(CGPoint(x: mx(loc.x), y: loc.y), xs, n) } else { hover = nil }
                         }
                 }
             }
@@ -132,7 +141,8 @@ struct NeckView: View {
         .frame(height: CGFloat(n - 1) * rowH + 40)
     }
 
-    /// The string and fret under a point: frets between their wires, fretless stops at the nearest semitone.
+    /// The string and fret under a point (in right-handed layout): frets between their wires, fretless
+    /// stops at the nearest semitone.
     private func spot(_ p: CGPoint, _ xs: [CGFloat], _ n: Int) -> (string: Int, fret: Int) {
         let row = min(n - 1, max(0, Int(((p.y - 8) / rowH).rounded())))
         var fret = 0

@@ -18,6 +18,8 @@ final class Prefs: ObservableObject {
 
     @Published var language: Language { didSet { d.set(language.rawValue, forKey: "language") } }
     @Published var appearance: AppearanceMode { didSet { d.set(appearance.rawValue, forKey: "appearance") } }
+    /// Necks and chord boxes drawn as a left-handed player sees them: nut on the right, bass string on the right.
+    @Published var leftHanded: Bool { didSet { d.set(leftHanded, forKey: "leftHanded") } }
 
     // MARK: Tuner
     @Published var instrumentID: String { didSet { d.set(instrumentID, forKey: "instrument") } }
@@ -97,6 +99,7 @@ final class Prefs: ObservableObject {
         let systemTurkish = Locale.preferredLanguages.first?.hasPrefix("tr") ?? false
         language = Language(rawValue: d.string(forKey: "language") ?? "") ?? (systemTurkish ? .tr : .en)
         appearance = AppearanceMode(rawValue: d.string(forKey: "appearance") ?? "") ?? .system
+        leftHanded = d.bool(forKey: "leftHanded")
         instrumentID = d.string(forKey: "instrument") ?? "guitar6"
         tuningIDs = d.dictionary(forKey: "tunings") as? [String: String] ?? [:]
         // Older builds stored a "chromatic" flag.

@@ -268,3 +268,81 @@ extension Progressions {
         return step(offset: pick.offset, quality: quality, minor: minor)
     }
 }
+
+// MARK: - Reharmonizing
+
+/// Another chord for one step of a progression, and why it works there.
+struct Reharm: Hashable {
+    enum Why: Hashable {
+        /// The key's own 7th chord on the same step.
+        case colour
+        /// A key chord a third away: two notes in common, the same job.
+        case relative
+        /// The dominant of the chord that follows.
+        case leadsTo
+        /// The dominant a tritone away, sliding down a half step into the chord that follows.
+        case slidesTo
+        /// A dominant's tritone substitute.
+        case tritone
+        /// The same step taken from the parallel key (C minor's chords in C major).
+        case borrowed
+        /// A diminished 7th a half step below the chord that follows.
+        case passing
+    }
+    let offset: Int
+    let quality: String
+    let why: Why
+}
+
+extension Progressions {
+    private static let dominants: Set<String> = ["7", "9", "13", "7♭9", "7♯9"]
+
+    /// Reharmonizations of step `i`: richer colour first, then swaps with the same function, then chords that
+    /// lead into the next step, then colour from the parallel key. The chord itself is never offered.
+    static func reharmonizations(of p: Progression, at i: Int) -> [Reharm] {
+        guard p.steps.indices.contains(i) else { return [] }
+        let cur = p.steps[i]
+        // The loop wraps: the last chord leads back to the first.
+        let next = p.steps[(i + 1) % p.steps.count]
+        let key = diatonic(minor: p.minor)
+        let degree = key.first { $0.offset == cur.offset }
+        var out: [Reharm] = []
+
+        // The key's own seventh on this step (V gets the dominant 7th; in minor the major V too).
+        if let d = degree, cur.quality == d.quality || (p.minor && cur.offset == 7 && cur.quality == "") {
+            let sevenths: [Int: String] = p.minor ? [0: "m7", 2: "m7♭5", 3: "maj7", 5: "m7", 7: "7", 8: "maj7", 10: "7"]
+                                                  : [0: "maj7", 2: "m7", 4: "m7", 5: "maj7", 7: "7", 9: "m7", 11: "m7♭5"]
+            if let q = sevenths[cur.offset] { out.append(Reharm(offset: cur.offset, quality: q, why: .colour)) }
+            if cur.offset == 7 { out.append(Reharm(offset: 7, quality: "sus4", why: .colour)) }
+        }
+        // Chords a third up or down that share two notes: I ↔ vi ↔ iii, IV ↔ ii, V ↔ vii°.
+        for d in key where d.offset != cur.offset && d.quality != "dim" {
+            let gap = ((d.offset - cur.offset) % 12 + 12) % 12
+            if [3, 4, 8, 9].contains(gap), degree != nil {
+                out.append(Reharm(offset: d.offset, quality: d.quality, why: .relative))
+            }
+        }
+        // Into the next chord: its dominant, that dominant's tritone substitute, a passing diminished.
+        if next.quality != "dim" && next.quality != "m7♭5" {
+            out.append(Reharm(offset: (next.offset + 7) % 12, quality: "7", why: .leadsTo))
+            out.append(Reharm(offset: (next.offset + 1) % 12, quality: "7", why: .slidesTo))
+        }
+        if dominants.contains(cur.quality) {
+            out.append(Reharm(offset: (cur.offset + 6) % 12, quality: "7", why: .tritone))
+        }
+        out.append(Reharm(offset: (next.offset + 11) % 12, quality: "dim7", why: .passing))
+        // Borrowed from the parallel key: the same step first, then the favourites.
+        let parallel = diatonic(minor: !p.minor)
+        if let d = parallel.first(where: { $0.offset == cur.offset }), d.quality != "dim" {
+            out.append(Reharm(offset: d.offset, quality: d.quality, why: .borrowed))
+        }
+        let favourites: [(Int, String)] = p.minor ? [(5, ""), (7, ""), (0, ""), (1, "")] : [(5, "m"), (8, ""), (10, ""), (3, "")]
+        for (o, q) in favourites { out.append(Reharm(offset: o, quality: q, why: .borrowed)) }
+
+        var seen: Set<String> = ["\(cur.offset)|\(cur.quality)"]
+        let unique = out.filter { seen.insert("\($0.offset)|\($0.quality)").inserted }
+        // Enough to choose from without burying the key's own chords.
+        let borrowed = unique.filter { $0.why == .borrowed }.prefix(2)
+        return Array(unique.filter { $0.why != .borrowed }.prefix(7)) + borrowed
+    }
+}
