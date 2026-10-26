@@ -54,6 +54,22 @@ struct ProgressionsView: View {
                     }
                     .buttonStyle(.plain)
                     .help(tr("Play / stop the loop (Space)"))
+                    Dropdown(chevron: false) {
+                        // Narrow windows keep just the icon.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 6) {
+                                Image(systemName: "circle.circle").font(.system(size: 12))
+                                Text(tr("Circle of fifths")).font(.system(size: 12, weight: .medium)).fixedSize()
+                            }
+                            .padding(.horizontal, 12)
+                            Image(systemName: "circle.circle").font(.system(size: 12)).frame(width: 34)
+                        }
+                        .foregroundStyle(Theme.text)
+                        .frame(height: 34)
+                        .background(Theme.line.opacity(0.6), in: Capsule())
+                    } content: { CircleOfFifthsView() }
+                    .padding(.horizontal, -8)
+                    .help(tr("The key's chords and its neighbours on the circle of fifths"))
                     saveButton(p)
                     Button { player.generate() } label: {
                         HStack(spacing: 6) {
@@ -404,6 +420,13 @@ private struct ChordPalette: View {
                                  detail: Progressions.numeral(offset: c.offset, quality: c.quality, minor: p.minor),
                                  selected: step.offset == c.offset && step.quality == c.quality) { pick(r, c.quality) }
                 }
+                DropdownHeader(title: tr("Reharmonize"))
+                ForEach(Progressions.reharmonizations(of: p, at: index), id: \.self) { c in
+                    let r = (p.key + c.offset) % 12
+                    DropdownItem(title: ChordsView.name(r, c.quality, prefs.notation), detail: why(c, p), selected: false) {
+                        pick(r, c.quality)
+                    }
+                }
                 DropdownHeader(title: tr("Any chord"))
                 Grid(horizontalSpacing: 0, verticalSpacing: 2) {
                     ForEach(0..<2, id: \.self) { row in
@@ -427,7 +450,23 @@ private struct ChordPalette: View {
                 .padding(.top, 6)
                 .padding(.bottom, 6)
             }
-            .frame(width: 262, alignment: .leading)
+            .frame(width: 290, alignment: .leading)
+        }
+    }
+
+    /// Why a reharmonization works, in a few words.
+    private func why(_ c: Reharm, _ p: Progression) -> String {
+        let n = prefs.notation
+        let next = (index + 1) % p.steps.count
+        let nextName = ChordsView.name(p.root(next), p.steps[next].quality, n)
+        switch c.why {
+        case .colour: return tr("adds colour")
+        case .relative: return tr("two notes in common")
+        case .leadsTo: return trf("leads to %@", nextName)
+        case .slidesTo: return trf("slides into %@", nextName)
+        case .tritone: return tr("tritone substitute")
+        case .passing: return trf("passes into %@", nextName)
+        case .borrowed: return trf("from %@", n.name(pc: p.key) + " " + (p.minor ? tr("major") : tr("minor")))
         }
     }
 

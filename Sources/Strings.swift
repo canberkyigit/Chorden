@@ -199,5 +199,36 @@ enum Strings {
         "soft, drummer-friendly": "yumuşak, davulcu dostu", "Start / stop (Space)": "Başlat / durdur (Boşluk)", "Tap the tempo (T)": "Tempoyu vur (T)",
         "Drag up or down, or use ↑ ↓": "Yukarı/aşağı sürükle ya da ↑ ↓ kullan",
         "Quarter notes": "Dörtlükler", "Eighth notes": "Sekizlikler", "Triplets": "Trioleler", "Sixteenth notes": "On altılıklar",
+
+        // Left-handed
+        "Left-handed": "Solak", "Mirror the neck and chord diagrams": "Sapı ve akor şemalarını aynala",
+
+        // EarQuiz: Sing and Find
+        "Sing": "Söyle", "Find notes": "Nota bul", "Sing it back": "Söyleyerek cevapla", "Find the note": "Notayı bul",
+        "On one string": "Tek telde", "Sing up: %@": "Yukarı söyle: %@", "Sing down: %@": "Aşağı söyle: %@",
+        "From %@ · any octave counts": "%@ notasından · her oktav sayılır",
+        "▶ plays the right answer.": "▶ doğru cevabı çalar.", "▶ plays the first note again.": "▶ ilk notayı yeniden çalar.",
+        "Listen to the first note…": "İlk notayı dinle…", "Now sing the note and hold it": "Şimdi notayı söyle ve tut",
+        "No steady note heard. ▶ tries again.": "Sabit bir nota duyulmadı. ▶ ile yeniden dene.",
+        "Right note, a little flat": "Doğru nota, biraz pes", "Right note, a little sharp": "Doğru nota, biraz tiz",
+        "You sang %@ (%@)": "%@ söyledin (%@)", "Unison": "Eşses",
+        "Chorden needs microphone access to hear you.": "Chorden'ın seni duyabilmesi için mikrofon izni gerekiyor.",
+        "Find %@ on string %d (%@)": "%@ notasını %d. telde bul (%@)",
+        "Find %@ on the keyboard": "Klavyede %@ notasını bul", "Find %@ on the neck": "Sapta %@ notasını bul",
+        "Click a key to answer.": "Cevaplamak için bir tuşa tıkla.", "Click the neck to answer.": "Cevaplamak için sapa tıkla.",
+        "Every place it's found is marked.": "Bulunduğu her yer işaretli.",
+        "Every place it's found is marked. Next one in a moment.": "Bulunduğu her yer işaretli. Sıradaki birazdan.",
+        "Right note, but on another string.": "Doğru nota, ama başka telde.", "That was %@.": "Bu %@ idi.",
+
+        // Progressions: reharmonizing and the circle of fifths
+        "Reharmonize": "Yeniden armonile", "adds colour": "renk katar", "two notes in common": "iki notası ortak",
+        "leads to %@": "%@ akoruna götürür", "slides into %@": "%@ akoruna kayar", "tritone substitute": "triton ikamesi",
+        "passes into %@": "%@ akoruna geçer", "from %@": "%@ tonundan ödünç",
+        "Circle of fifths": "Beşliler çemberi",
+        "The key's chords and its neighbours on the circle of fifths": "Tonun akorları ve beşliler çemberindeki komşuları",
+        "Click a chord to hear it": "Duymak için bir akora tıkla", "Add": "Ekle",
+        "Add this chord to the end of the progression": "Bu akoru progresyonun sonuna ekle",
+        "Move to %@": "%@ tonuna taşı", "Play the same progression in this key": "Aynı progresyonu bu tonda çal",
+        "Shaded: the key's main chords. Dots: chords in the progression.": "Gölgeli: tonun ana akorları. Noktalar: progresyondaki akorlar.",
     ]
 }

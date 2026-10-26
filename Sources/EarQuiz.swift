@@ -2,9 +2,10 @@ import Foundation
 
 // MARK: - What can be asked
 
-/// The kinds of question the EarQuiz tab asks; Mixed draws from all the others.
+/// The kinds of question the EarQuiz tab asks; Mixed draws from the listening ones.
+/// Sing answers with the voice (the microphone judges it); Find answers on the neck or keyboard.
 enum EarMode: String, CaseIterable {
-    case mixed, intervals, chords, scales, notes
+    case mixed, intervals, chords, scales, notes, sing, find
 
     /// The kinds Mixed draws from, with how often each comes up.
     static let mixable: [(mode: EarMode, weight: Double)] = [(.intervals, 1), (.chords, 1), (.scales, 0.8), (.notes, 0.35)]
@@ -16,6 +17,8 @@ enum EarMode: String, CaseIterable {
         case .chords: return "Chords"
         case .scales: return "Scales & Makams"
         case .notes: return "Notes"
+        case .sing: return "Sing"
+        case .find: return "Find notes"
         }
     }
 
@@ -26,8 +29,13 @@ enum EarMode: String, CaseIterable {
         case .chords: return "Which chord?"
         case .scales: return "Which scale?"
         case .notes: return "Which note?"
+        case .sing: return "Sing it back"
+        case .find: return "Find the note"
         }
     }
+
+    /// Answered by clicking one of the answer buttons (or its number key).
+    var answersByButton: Bool { self != .sing && self != .find }
 }
 
 /// One possible answer.
@@ -55,6 +63,11 @@ struct EarQuestion: Equatable {
     let item: String
     let root: Int
     let way: String
+    /// Find: the string the note must be found on (nil = anywhere).
+    var string: Int? = nil
+
+    /// Sing: the note to sing, `item` semitones up or down from the root.
+    var target: Int { root + (way == "down" ? -1 : 1) * (Int(item) ?? 0) }
 }
 
 /// A sound to make, `at` seconds after the question starts.
@@ -95,8 +108,10 @@ enum EarQuiz {
             return chordIDs.map { id in EarItem(id: id, name: Chords.quality(id).name) }
         case .scales:
             return scaleIDs.map { id in EarItem(id: id, name: scaleNames[id] ?? Scales.scale(id).name) }
-        case .notes:
+        case .notes, .find:
             return (0..<12).map { EarItem(id: "\($0)", name: "") }
+        case .sing:
+            return (1...12).map { EarItem(id: "\($0)", name: intervalNames[$0]) }
         }
     }
 
@@ -126,15 +141,20 @@ enum EarQuiz {
                                                     "hicazkar", "suzinak", "humayun", "buselik", "mahur", "zirguleli",
                                                     "sedaraban", "nikriz", "neveser"]),
                     EarPreset(id: "All", items: scaleIDs)]
-        case .notes:
+        case .notes, .find:
             return [EarPreset(id: "White keys", items: ["0", "2", "4", "5", "7", "9", "11"]),
                     EarPreset(id: "All", items: (0..<12).map(String.init))]
+        case .sing:
+            return [EarPreset(id: "Beginner", items: ["3", "4", "7", "12"]),
+                    EarPreset(id: "Intermediate", items: ["2", "3", "4", "5", "7", "9", "12"]),
+                    EarPreset(id: "Octave", items: (1...12).map(String.init))]
         }
     }
 
     /// The set a kind starts with until one is picked: wide enough that the questions keep varying.
     static func defaultSet(_ mode: EarMode) -> [String] {
-        let id = [EarMode.intervals: "Octave", .chords: "Common", .scales: "Popular", .notes: "All"][mode] ?? ""
+        let id = [EarMode.intervals: "Octave", .chords: "Common", .scales: "Popular", .notes: "All",
+                  .sing: "Beginner", .find: "White keys"][mode] ?? ""
         return (presets(mode).first { $0.id == id } ?? presets(mode)[0]).items
     }
 
@@ -146,27 +166,30 @@ enum EarQuiz {
         case .scales: return []
         // One switch: hear C before the note (relative pitch) or the note alone (perfect pitch).
         case .notes: return [EarWay(id: "ref", name: "Hear %@ first")]
+        case .sing: return [EarWay(id: "up", name: "Up"), EarWay(id: "down", name: "Down")]
+        // One switch: anywhere on the neck, or on a string named by the question.
+        case .find: return [EarWay(id: "string", name: "On one string")]
         }
     }
 
     /// Ways that must keep at least one selected (Notes' reference is a plain on/off switch).
-    static func needsWay(_ mode: EarMode) -> Bool { mode == .intervals || mode == .chords }
+    static func needsWay(_ mode: EarMode) -> Bool { mode == .intervals || mode == .chords || mode == .sing }
 
     static func defaultWays(_ mode: EarMode) -> [String] {
         switch mode {
-        case .intervals: return ["up"]
+        case .intervals, .sing: return ["up"]
         case .chords: return ["together"]
-        case .scales, .notes, .mixed: return []
+        case .scales, .notes, .mixed, .find: return []
         }
     }
 
     /// Semitones the question spans above its root.
     static func span(_ mode: EarMode, _ item: String) -> Int {
         switch mode {
-        case .intervals: return Int(item) ?? 12
+        case .intervals, .sing: return Int(item) ?? 12
         case .chords: return Chords.quality(item).intervals.max() ?? 7
         case .scales: return 12
-        case .notes, .mixed: return 0
+        case .notes, .mixed, .find: return 0
         }
     }
 
@@ -207,12 +230,19 @@ enum EarQuiz {
         let way: String
         if mode == .notes {
             way = ways.contains("ref") ? "ref" : ""
+        } else if mode == .find {
+            way = ways.contains("string") ? "string" : ""
         } else {
             let allowed = ways.filter { w in self.ways(mode).contains { $0.id == w } }
             way = allowed.randomElement(using: &random) ?? defaultWays(mode).first ?? ""
         }
         let root: Int
-        if mode == .notes {
+        if mode == .find {
+            root = Int(item) ?? 0
+        } else if mode == .sing {
+            // Around the middle of most voices; any octave of the answer counts, so low and high voices both fit.
+            root = Int.random(in: 52...64, using: &random)
+        } else if mode == .notes {
             // Any octave of the pitch class inside the register.
             let pc = Int(item) ?? 0
             let options = register.filter { (($0 % 12) + 12) % 12 == pc }
@@ -268,9 +298,20 @@ enum EarQuiz {
             return scaleRun(item, root: q.root).enumerated().map { i, m in
                 EarEvent(at: Double(i) * scaleStep, midis: [m], hold: scaleStep + 0.03, strings: [1])
             }
+        case .sing:
+            return [EarEvent(at: 0, midis: [r], hold: 1.1, strings: [1])]
+        case .find:
+            // The note to find, so its sound goes with its place.
+            return [EarEvent(at: 0, midis: [Double(60 + ((q.root % 12) + 12) % 12)], hold: 0.9, strings: [1])]
         case .mixed:
             return []
         }
+    }
+
+    /// Sing: the root, then the note that was asked for.
+    static func answerEvents(_ q: EarQuestion) -> [EarEvent] {
+        [EarEvent(at: 0, midis: [Double(q.root)], hold: 0.8, strings: [1]),
+         EarEvent(at: 0.75, midis: [Double(q.target)], hold: 1.2, strings: [1])]
     }
 
     static let scaleStep = 0.24
@@ -315,7 +356,7 @@ enum EarQuiz {
     /// Letter-steps and semitones of each note the item is made of, from the root.
     static func shape(_ mode: EarMode, _ item: String) -> [(steps: Int, semitones: Int)] {
         switch mode {
-        case .intervals:
+        case .intervals, .sing:
             let n = Int(item) ?? 0
             return [(0, 0), (intervalSteps[n], n)]
         case .chords:
@@ -324,7 +365,7 @@ enum EarQuiz {
                 let digits = q.label(iv).filter(\.isNumber)
                 return (Int(digits).map { $0 - 1 } ?? 0, iv)
             }
-        case .scales, .notes, .mixed:
+        case .scales, .notes, .mixed, .find:
             return [(0, 0)]
         }
     }

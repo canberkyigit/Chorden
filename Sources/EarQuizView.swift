@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 /// Runs the quiz: asks, plays, checks and keeps score. Per-item scores are kept between launches and
@@ -31,10 +32,33 @@ final class EarQuizModel: ObservableObject {
     @Published private(set) var stats: [String: [Int]]
     @Published private(set) var best: [String: Int]
 
+    /// Sing: where the microphone is with the question on screen.
+    enum Voice: Equatable {
+        case idle
+        /// The first note is playing; listening starts when it ends.
+        case waiting
+        case listening
+        /// A held note was heard: its pitch (MIDI) and its distance from the nearest right answer in cents.
+        case heard(midi: Double, cents: Double)
+        /// Nothing steady was sung in time.
+        case silent
+    }
+    @Published private(set) var voice = Voice.idle
+    /// Sing: the pitch being sung right now (fractional MIDI).
+    @Published private(set) var liveMidi: Double?
+    /// Find: the note clicked as the answer, and its string on a neck (nil on a keyboard).
+    @Published private(set) var tapped: (midi: Int, string: Int?)?
+
     private var misses: [String: Int] = [:]
     private var recent: [String] = []
     private var token = 0
     private var pending: DispatchWorkItem?
+    /// Sing: the microphone is held for the whole session, so it doesn't restart between questions.
+    private var micOn = false
+    private var micSub: AnyCancellable?
+    private var listenWork: DispatchWorkItem?
+    private var silenceWork: DispatchWorkItem?
+    private var heard: [Double] = []
 
     private init() {
         mode = EarMode(rawValue: d.string(forKey: "earQuiz.mode") ?? "") ?? .mixed
@@ -175,7 +199,9 @@ final class EarQuizModel: ObservableObject {
     func replay() {
         guard let q = question else { return }
         sounding = nil
-        play(EarQuiz.events(q, item: q.item))
+        // Sing: before answering, the first note again and another try; afterwards, the right answer.
+        if q.mode == .sing && answered { return play(EarQuiz.answerEvents(q)) }
+        ask(q)
     }
 
     func next() {
@@ -202,14 +228,37 @@ final class EarQuizModel: ObservableObject {
         let missed = Dictionary(uniqueKeysWithValues: misses.filter { $0.key.hasPrefix(prefix) }
             .map { (String($0.key.dropFirst(prefix.count)), $0.value) })
         let lately = recent.filter { $0.hasPrefix(prefix) }.map { String($0.dropFirst(prefix.count)) }
-        let q = EarQuiz.makeQuestion(mode: m, set: pool, ways: ways(m),
+        var q = EarQuiz.makeQuestion(mode: m, set: pool, ways: ways(m),
                                      register: EarQuiz.register(prefs.instrument, prefs.tuning),
                                      stats: stat, misses: missed, recent: lately, random: &rng)
+        if m == .find, q.way == "string", !prefs.instrument.isKeyboard {
+            q.string = prefs.tuning.notes.indices.randomElement(using: &rng)
+        }
         recent = Array((recent + [key(m, q.item)]).suffix(8))
         question = q
         chosen = nil
         sounding = nil
-        play(EarQuiz.events(q, item: q.item))
+        tapped = nil
+        ask(q)
+    }
+
+    /// Plays the question; Sing then listens for the answer.
+    private func ask(_ q: EarQuestion) {
+        let events = EarQuiz.events(q, item: q.item)
+        play(events)
+        guard q.mode == .sing else { return }
+        stopListening()
+        voice = .waiting
+        let work = DispatchWorkItem { [weak self] in self?.listen() }
+        listenWork = work
+        let end = events.map { $0.at + $0.hold }.max() ?? 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + end + 0.25, execute: work)
+    }
+
+    /// The tuner or instrument changed: a Find question may name a string that isn't there any more.
+    func instrumentChanged() {
+        stop()
+        if current == .find && question != nil { next() }
     }
 
     /// Keys that answer, in order: 1–9, 0, then − and = (all twelve notes).
@@ -217,7 +266,7 @@ final class EarQuizModel: ObservableObject {
 
     /// Answers by the number key's place among the answers in play.
     func answer(index: Int) {
-        guard !editing, question != nil else { return }
+        guard !editing, question != nil, current.answersByButton else { return }
         let s = inPlay
         guard s.indices.contains(index) else { return }
         answer(s[index])
@@ -233,8 +282,13 @@ final class EarQuizModel: ObservableObject {
             play(EarQuiz.events(q, item: item))
             return
         }
+        record(item, right: isCorrect(item))
+    }
+
+    /// Scores the first answer to the question on screen.
+    private func record(_ item: String, right: Bool) {
+        guard let q = question else { return }
         chosen = item
-        let right = isCorrect(item)
         var s = session[mode.rawValue] ?? [0, 0, 0]
         s[1] += 1
         if right { s[0] += 1; s[2] += 1 } else { s[2] = 0 }
@@ -257,8 +311,108 @@ final class EarQuizModel: ObservableObject {
             }
         } else {
             misses[key(q.mode, q.item), default: 0] += 2
-            misses[key(q.mode, item), default: 0] += 1
+            if q.mode.answersByButton { misses[key(q.mode, item), default: 0] += 1 }
         }
+    }
+
+    // MARK: Find
+
+    /// Find: a place on the neck (its note and string) or a key was clicked. The first click answers;
+    /// later ones just sound, to explore.
+    func tap(midi: Int, string: Int?) {
+        Synth.shared.strum([Synth.Note(frequency: Music.frequency(midi: Double(midi), a4: prefs.a4), string: string)])
+        guard let q = question, q.mode == .find, !answered else { return }
+        pending?.cancel()
+        tapped = (midi, string)
+        let pc = ((midi % 12) + 12) % 12
+        let right = pc == q.root && (q.string == nil || q.string == string)
+        record(right ? q.item : "\(pc)", right: right)
+    }
+
+    // MARK: Sing
+
+    private func listen() {
+        guard let q = question, q.mode == .sing, !answered else { return }
+        // The question's last note must not be heard as the answer.
+        Synth.shared.silence()
+        if !micOn {
+            micOn = true
+            let tuner = TunerModel.shared
+            tuner.singing = true
+            tuner.acquire("earquiz")
+            micSub = tuner.frames.sink { [weak self] in self?.hear($0) }
+        }
+        heard = []
+        liveMidi = nil
+        voice = .listening
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.voice == .listening else { return }
+            self.voice = .silent
+            self.liveMidi = nil
+        }
+        silenceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 9, execute: work)
+    }
+
+    private func hear(_ f: Analyzer.Output) {
+        guard voice == .listening else { return }
+        guard f.reading.hasSignal else {
+            heard = []
+            liveMidi = nil
+            return
+        }
+        guard f.fresh else { return }
+        let m = f.reading.midi
+        liveMidi = m
+        // A different note (a slide into the pitch, a new attempt) starts the count again.
+        if let last = heard.last, abs(m - last) > 0.8 { heard = [] }
+        heard.append(m)
+        // Held for about 0.4 s: that's the answer, read from its steady end.
+        guard heard.count >= 20 else { return }
+        judge(heard.suffix(12).sorted()[6])
+    }
+
+    /// Any octave of the asked note counts (low and high voices alike), but not the first note itself:
+    /// an octave must really move.
+    private func judge(_ sung: Double) {
+        guard let q = question else { return }
+        silenceWork?.cancel()
+        let answers = (-3...3).map { Double(q.target + 12 * $0) }.filter { abs($0 - Double(q.root)) > 0.5 }
+        let nearest = answers.min { abs($0 - sung) < abs($1 - sung) } ?? Double(q.target)
+        let cents = (sung - nearest) * 100
+        voice = .heard(midi: sung, cents: cents)
+        liveMidi = nil
+        let right = abs(cents) <= 50
+        record(right ? q.item : "", right: right)
+    }
+
+    /// Stops listening for an answer; the microphone itself stays on until the session ends.
+    private func stopListening() {
+        listenWork?.cancel()
+        listenWork = nil
+        silenceWork?.cancel()
+        silenceWork = nil
+        if voice == .listening || voice == .waiting { voice = .idle }
+        liveMidi = nil
+    }
+
+    #if SNAPSHOT
+    /// Test hooks: the Sing question on screen answered as if `midi` were sung, or shown while listening.
+    func injectSung(_ midi: Double) { judge(midi) }
+
+    func injectListening(_ midi: Double?) {
+        stopListening()
+        voice = .listening
+        liveMidi = midi
+    }
+    #endif
+
+    private func releaseMic() {
+        guard micOn else { return }
+        micOn = false
+        micSub = nil
+        TunerModel.shared.singing = false
+        TunerModel.shared.release("earquiz")
     }
 
     // MARK: Sound
@@ -301,6 +455,8 @@ final class EarQuizModel: ObservableObject {
         pending = nil
         stopSound()
         sounding = nil
+        stopListening()
+        releaseMic()
     }
 
     private func reset() {
@@ -308,13 +464,15 @@ final class EarQuizModel: ObservableObject {
         editing = false
         question = nil
         chosen = nil
+        tapped = nil
+        voice = .idle
         recent = []
     }
 
     // MARK: Names
 
     func title(_ item: String) -> String {
-        if current == .notes { return prefs.notation.name(pc: Int(item) ?? 0) }
+        if current == .notes || current == .find { return prefs.notation.name(pc: Int(item) ?? 0) }
         let name = tr(allItems.first { $0.id == item }?.name ?? item)
         // Chord names are lower case in the chord library ("minor 7th").
         guard current == .chords, let first = name.first else { return name }
@@ -341,6 +499,16 @@ final class EarQuizModel: ObservableObject {
             return scale.degrees.indices.map { Scales.degreeLabel(scale, $0, root: pc, n) }.joined(separator: " ")
         case .notes:
             return n.name(pc: q.root) + "\(q.root / 12 - 1)"
+        case .sing:
+            // Spelled from the lower of the two notes, read in the order they are sung.
+            if q.way == "down" {
+                let s = EarQuiz.spelling(.intervals, q.item, root: q.target, n)
+                return s[1] + " → " + s[0]
+            }
+            let s = EarQuiz.spelling(.intervals, q.item, root: q.root, n)
+            return s[0] + " → " + s[1]
+        case .find:
+            return n.name(pc: q.root)
         case .mixed:
             return ""
         }
@@ -352,6 +520,7 @@ final class EarQuizModel: ObservableObject {
 struct EarQuizView: View {
     @ObservedObject var model = EarQuizModel.shared
     @ObservedObject var prefs = Prefs.shared
+    @ObservedObject var tuner = TunerModel.shared
 
     var body: some View {
         let mode = model.mode
@@ -390,7 +559,8 @@ struct EarQuizView: View {
                 }
                 .help(tr("Choose which answers are in play"))
                 Spacer()
-                ForEach(EarQuiz.ways(mode)) { w in
+                // A keyboard has no strings to name.
+                ForEach(EarQuiz.ways(mode).filter { _ in mode != .find || !prefs.instrument.isKeyboard }) { w in
                     TextChoice(title: mode == .notes ? trf(w.name, prefs.notation.name(pc: 0)) : tr(w.name),
                                selected: model.ways.contains(w.id), size: 11) { model.toggleWay(w.id) }
                 }
@@ -401,15 +571,24 @@ struct EarQuizView: View {
 
             Spacer(minLength: 12)
             prompt
-            answers
-                .padding(.top, 26)
+            Group {
+                if model.editing || model.current.answersByButton {
+                    answers
+                } else if model.current == .sing {
+                    SingPanel(model: model, tuner: tuner)
+                } else {
+                    findBoard
+                }
+            }
+            .padding(.top, 26)
             Spacer(minLength: 12)
             Rectangle().fill(Theme.line).frame(height: 1)
             footer
                 .padding(.vertical, 12)
         }
         .padding(.horizontal, 28)
-        .onChange(of: prefs.instrumentID) { _ in model.stop() }
+        .onChange(of: prefs.instrumentID) { _ in model.instrumentChanged() }
+        .onChange(of: prefs.tuning) { _ in model.instrumentChanged() }
         // Leaving the tab stops the sound.
         .onDisappear { model.stop() }
     }
@@ -449,12 +628,21 @@ struct EarQuizView: View {
     private var prompt: some View {
         HStack(spacing: 22) {
             Button { model.space() } label: {
-                Image(systemName: model.playing && model.sounding == nil ? "speaker.wave.2.fill" : "play.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(Color(nsColor: Theme.windowBG))
-                    .frame(width: 72, height: 72)
-                    .background(Circle().fill(Theme.text))
-                    .contentShape(Circle())
+                Group {
+                    // Find shows the note to look for; Sing shows when it's listening.
+                    if model.current == .find, let q = model.question {
+                        Text(prefs.notation.name(pc: q.root)).font(.system(size: 26, weight: .semibold))
+                    } else if model.voice == .listening {
+                        Image(systemName: "mic.fill").font(.system(size: 24))
+                    } else {
+                        Image(systemName: model.playing && model.sounding == nil ? "speaker.wave.2.fill" : "play.fill")
+                            .font(.system(size: 22))
+                    }
+                }
+                .foregroundStyle(Color(nsColor: Theme.windowBG))
+                .frame(width: 72, height: 72)
+                .background(Circle().fill(model.voice == .listening ? Theme.good : Theme.text))
+                .contentShape(Circle())
             }
             .buttonStyle(.plain)
             .help(tr("Play the question again (Space)"))
@@ -478,6 +666,16 @@ struct EarQuizView: View {
         let font = Font.system(size: 22, weight: .light)
         if model.editing {
             Text(tr("Choose what to practise")).font(font)
+        } else if let q = model.question, !q.mode.answersByButton {
+            // Sing and Find keep the task in view; a mark shows how it went.
+            HStack(spacing: 8) {
+                if let c = model.chosen {
+                    Image(systemName: model.isCorrect(c) ? "checkmark" : "xmark")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(model.isCorrect(c) ? Theme.good : Theme.off)
+                }
+                Text(task(q)).font(font).lineLimit(1).minimumScaleFactor(0.7)
+            }
         } else if let q = model.question, let c = model.chosen {
             HStack(spacing: 8) {
                 // Right: a check. Wrong: just the answer; the red line below says what was chosen.
@@ -497,6 +695,17 @@ struct EarQuizView: View {
         let small = Font.system(size: 12)
         if model.editing {
             Text(tr("Click answers to include or leave them out.")).font(small).foregroundStyle(Theme.dim)
+        } else if let q = model.question, q.mode == .sing {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.answered ? model.spelled(q) : trf("From %@ · any octave counts", prefs.notation.name(midi: q.root)))
+                    .font(small).foregroundStyle(Theme.dim)
+                Text(model.answered ? (model.isCorrect(model.chosen ?? "") && model.autoNext ? tr("Next one in a moment.")
+                                                                                           : tr("▶ plays the right answer."))
+                                    : tr("▶ plays the first note again."))
+                    .font(.system(size: 11)).foregroundStyle(Theme.ghost)
+            }
+        } else if let q = model.question, q.mode == .find {
+            Text(findDetail(q)).font(small).foregroundStyle(model.answered && !model.isCorrect(model.chosen ?? "") ? Theme.off : Theme.dim)
         } else if let q = model.question, let c = model.chosen {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 0) {
@@ -517,6 +726,78 @@ struct EarQuizView: View {
         } else {
             Text(tr("Space plays it again · number keys answer")).font(small).foregroundStyle(Theme.ghost)
         }
+    }
+
+    /// Sing and Find: what to do, in words.
+    private func task(_ q: EarQuestion) -> String {
+        let n = prefs.notation
+        switch q.mode {
+        case .sing:
+            return trf(q.way == "down" ? "Sing down: %@" : "Sing up: %@", model.title(q.item))
+        case .find:
+            let note = n.name(pc: q.root)
+            let tuning = prefs.tuning
+            if let s = q.string, s < tuning.notes.count {
+                // Strings are numbered from the highest, as players count them.
+                return trf("Find %@ on string %d (%@)", note, tuning.notes.count - s, n.name(pc: tuning.notes[s]))
+            }
+            return trf(prefs.instrument.isKeyboard ? "Find %@ on the keyboard" : "Find %@ on the neck", note)
+        default:
+            return ""
+        }
+    }
+
+    private func findDetail(_ q: EarQuestion) -> String {
+        guard let c = model.chosen, let t = model.tapped else {
+            return tr(prefs.instrument.isKeyboard ? "Click a key to answer." : "Click the neck to answer.")
+        }
+        if model.isCorrect(c) {
+            return model.autoNext ? tr("Every place it's found is marked. Next one in a moment.")
+                                  : tr("Every place it's found is marked.")
+        }
+        let pc = ((t.midi % 12) + 12) % 12
+        if pc == q.root { return tr("Right note, but on another string.") }
+        return trf("That was %@.", prefs.notation.name(pc: pc))
+    }
+
+    /// Find: the neck (or keyboard) to answer on; once answered, every right place is marked.
+    @ViewBuilder private var findBoard: some View {
+        let instrument = prefs.instrument
+        let tuning = prefs.tuning
+        let q = model.question
+        let shown = model.answered ? q : nil
+        if instrument.isKeyboard {
+            let low = 48, high = 72
+            let marks = Dictionary(uniqueKeysWithValues: (low...high).filter { m in
+                shown.map { ((m % 12) + 12) % 12 == $0.root } ?? false
+            }.map { ($0, KeyMark(label: prefs.notation.name(pc: $0), root: true)) })
+            KeyboardView(low: low, high: high, marks: marks.merging(wrongKey) { a, _ in a }, height: 130) { m in
+                model.tap(midi: m, string: nil)
+            }
+        } else {
+            let fretless = instrument.frets == 0
+            let right = shown.map { q in
+                NeckMarks.build(tuning: tuning, frets: fretless ? 12 : min(instrument.frets, 15), fretless: fretless,
+                                root: q.root, tones: [(0, prefs.notation.name(pc: q.root))])
+                    .filter { q.string == nil || $0.string == q.string }
+            } ?? []
+            NeckView(instrument: instrument, tuning: tuning, marks: right + wrongNeck(tuning),
+                     onTap: { s, f in model.tap(midi: tuning.notes[s] + f, string: s) },
+                     rowH: 30, highlight: q?.string.flatMap { $0 < tuning.notes.count ? $0 : nil })
+        }
+    }
+
+    /// The clicked place when it was wrong, named, so it's clear what was played.
+    private func wrongNeck(_ tuning: Tuning) -> [NeckMark] {
+        guard let c = model.chosen, !model.isCorrect(c), let t = model.tapped, let s = t.string, s < tuning.notes.count
+        else { return [] }
+        return [NeckMark(string: s, position: Double(t.midi - tuning.notes[s]), label: prefs.notation.name(pc: t.midi),
+                         root: false, approx: false, midi: Double(t.midi))]
+    }
+
+    private var wrongKey: [Int: KeyMark] {
+        guard let c = model.chosen, !model.isCorrect(c), let t = model.tapped else { return [:] }
+        return [t.midi: KeyMark(label: prefs.notation.name(pc: t.midi), root: false)]
     }
 
     private var answers: some View {
@@ -703,6 +984,103 @@ private struct AnswerButton: View {
         case .wrong: return Theme.off.opacity(0.55)
         case .excluded: return Theme.line.opacity(0.7)
         default: return hover ? Theme.faint : Theme.line
+        }
+    }
+}
+
+/// Sing: the note being sung while listening; afterwards, how far it was from the right one.
+private struct SingPanel: View {
+    @ObservedObject var model: EarQuizModel
+    @ObservedObject var tuner: TunerModel
+    @ObservedObject var prefs = Prefs.shared
+
+    var body: some View {
+        VStack(spacing: 14) {
+            if tuner.status == .denied && model.voice != .idle {
+                Text(tr("Chorden needs microphone access to hear you."))
+                    .font(.system(size: 13)).foregroundStyle(Theme.dim)
+                Button(tr("Open Privacy Settings")) {
+                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                }
+            } else {
+                meter.frame(height: 62)
+                Text(status).font(.system(size: 13, weight: .medium)).foregroundStyle(statusColor)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 140)
+    }
+
+    @ViewBuilder private var meter: some View {
+        switch model.voice {
+        case .heard(let midi, let cents):
+            CentsMeter(cents: cents,
+                       label: abs(cents) <= 50 ? String(format: "%+.0f ¢", cents) : prefs.notation.name(midi: Int(midi.rounded())))
+        case .listening:
+            // What the microphone hears right now, so it's clear it's working.
+            Text(model.liveMidi.map { prefs.notation.name(midi: Int($0.rounded())) } ?? "…")
+                .font(.system(size: 34, weight: .light))
+                .foregroundStyle(model.liveMidi == nil ? Theme.ghost : Theme.text)
+        default:
+            Image(systemName: "waveform").font(.system(size: 30, weight: .light)).foregroundStyle(Theme.ghost)
+        }
+    }
+
+    private var status: String {
+        switch model.voice {
+        case .idle: return model.question == nil ? tr("Press Space or ▶ to hear the first one.") : ""
+        case .waiting: return tr("Listen to the first note…")
+        case .listening: return tr("Now sing the note and hold it")
+        case .silent: return tr("No steady note heard. ▶ tries again.")
+        case .heard(let midi, let cents):
+            guard let q = model.question else { return "" }
+            if abs(cents) <= 15 { return tr("In tune") }
+            if abs(cents) <= 50 { return tr(cents < 0 ? "Right note, a little flat" : "Right note, a little sharp") }
+            let semis = abs(Int((midi - Double(q.root)).rounded()))
+            let name = EarQuiz.intervalNames[semis > 0 && semis % 12 == 0 ? 12 : semis % 12]
+            return trf("You sang %@ (%@)", prefs.notation.name(midi: Int(midi.rounded())), tr(name))
+        }
+    }
+
+    private var statusColor: Color {
+        guard case .heard(_, let cents) = model.voice else { return Theme.dim }
+        return CentsMeter.color(cents)
+    }
+}
+
+/// How far a sung note was from the right one: the in-tune band in the middle, the right-note band around it.
+private struct CentsMeter: View {
+    let cents: Double
+    let label: String
+    private let width: CGFloat = 320
+
+    static func color(_ cents: Double) -> Color { abs(cents) <= 15 ? Theme.good : abs(cents) <= 50 ? Theme.warn : Theme.off }
+
+    var body: some View {
+        let c = max(-100, min(100, cents))
+        VStack(spacing: 6) {
+            Text(label).font(.system(size: 26, weight: .light).monospacedDigit()).foregroundStyle(Self.color(cents))
+            // A wrong note is just named: off the scale, a dot at the edge would only say "very sharp".
+            if abs(cents) <= 50 { scale(c) }
+        }
+    }
+
+    private func scale(_ c: Double) -> some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .leading) {
+                Capsule().fill(Theme.line.opacity(0.6)).frame(width: width, height: 4)
+                Capsule().fill(Theme.good.opacity(0.16)).frame(width: width * 0.5, height: 10).offset(x: width * 0.25)
+                Capsule().fill(Theme.good.opacity(0.4)).frame(width: width * 0.15, height: 10).offset(x: width * 0.425)
+                Rectangle().fill(Theme.dim).frame(width: 1, height: 16).offset(x: width / 2 - 0.5)
+                Circle().fill(Self.color(cents)).frame(width: 14, height: 14).offset(x: width * (c + 100) / 200 - 7)
+            }
+            .frame(width: width, height: 16)
+            HStack {
+                Text("♭")
+                Spacer()
+                Text("♯")
+            }
+            .font(.system(size: 11)).foregroundStyle(Theme.ghost).frame(width: width)
         }
     }
 }

@@ -301,6 +301,21 @@ final class ProgressionPlayer: ObservableObject {
         return steps.count - 1
     }
 
+    /// Adds a given chord at the end; returns its index.
+    @discardableResult
+    func appendChord(root: Int, quality: String) -> Int? {
+        guard let p = progression, p.steps.count < Progressions.lengths.upperBound else { return nil }
+        let steps = p.steps + [Progressions.step(offset: root - p.key, quality: quality, minor: p.minor)]
+        replace(Progression(key: p.key, minor: p.minor, mood: p.mood, steps: steps)) { $0 }
+        return steps.count - 1
+    }
+
+    /// Moves the whole progression to another key; every chord keeps its place in the key.
+    func setKey(_ key: Int) {
+        guard let p = progression else { return }
+        replace(Progression(key: ((key % 12) + 12) % 12, minor: p.minor, mood: p.mood, steps: p.steps)) { $0 }
+    }
+
     func removeChord(at i: Int) {
         guard let p = progression, p.steps.count > Progressions.lengths.lowerBound, p.steps.indices.contains(i) else { return }
         var steps = p.steps

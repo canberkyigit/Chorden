@@ -126,6 +126,14 @@ struct SettingsView: View {
                 }
             }
             GridRow {
+                label("Left-handed")
+                Toggle("", isOn: $prefs.leftHanded)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .help(tr("Mirror the neck and chord diagrams"))
+            }
+            GridRow {
                 label("Reference")
                 HStack(spacing: 4) {
                     step("minus") { prefs.a4 = max(400, prefs.a4 - 1) }

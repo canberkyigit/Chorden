@@ -312,9 +312,11 @@ struct ChordDiagram: View {
         let n = tuning.notes.count
         let width = CGFloat(n - 1) * spacing
         let base = voicing.highestFret <= rows ? 1 : voicing.lowestFret
+        let lefty = prefs.leftHanded
         Canvas { ctx, size in
             let left: CGFloat = 26, top: CGFloat = 22
-            let x = { (s: Int) in left + CGFloat(s) * spacing }
+            // A left-handed box puts the bass string on the right.
+            let x = { (s: Int) in left + CGFloat(lefty ? n - 1 - s : s) * spacing }
             let y = { (fret: Int) in top + (CGFloat(fret - base) + 0.5) * fretH }
 
             // Grid.
@@ -329,8 +331,9 @@ struct ChordDiagram: View {
                          with: .color(Theme.faint))
             }
             if base > 1 {
+                // The fret number sits beside the bass string.
                 ctx.draw(Text("\(base)").font(.system(size: 10, weight: .medium)).foregroundColor(Theme.dim),
-                         at: CGPoint(x: left - 13, y: y(base)))
+                         at: CGPoint(x: lefty ? left + width + 11 : left - 13, y: y(base)))
             }
 
             // Open / muted markers.
@@ -348,7 +351,8 @@ struct ChordDiagram: View {
 
             // Barre.
             if let b = voicing.barre {
-                let r = CGRect(x: x(b.from) - 8, y: y(b.fret) - 8, width: x(b.to) - x(b.from) + 16, height: 16)
+                let x0 = min(x(b.from), x(b.to)), x1 = max(x(b.from), x(b.to))
+                let r = CGRect(x: x0 - 8, y: y(b.fret) - 8, width: x1 - x0 + 16, height: 16)
                 ctx.fill(Path(roundedRect: r, cornerRadius: 8), with: .color(Theme.dim.opacity(0.9)))
             }
 
