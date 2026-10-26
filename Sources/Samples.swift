@@ -106,12 +106,19 @@ struct SampleVoice {
         // With a soft layer, gentle notes use the softly played recording: a real change of tone, not just volume.
         let layered = notes.contains { $0.soft }
         let pool = layered ? notes.filter { $0.soft == (velocity < 0.62) } : notes
-        note = pool.min { abs($0.midi - midi) < abs($1.midi - midi) }!
-        step = pow(2, (midi - note.midi) / 12) * note.rate / sampleRate
+        let nearest = pool.min { abs($0.midi - midi) < abs($1.midi - midi) }!
+        // Round-robin: a note within a semitone of two recordings may come from either, and every note gets a
+        // touch of its own tuning, tone and force, so a repeated strum never sounds copied. A recorded voice is
+        // played exactly as it was.
+        let neighbours = raw ? [] : pool.filter { abs($0.midi - midi) <= 1.01 }
+        note = neighbours.count > 1 && Bool.random() ? neighbours.randomElement()! : nearest
+        let detune = raw ? 0 : Double.random(in: -2...2) / 100
+        step = pow(2, (midi - note.midi + detune) / 12) * note.rate / sampleRate
         self.delay = delay
-        gain = Float(layered ? 0.65 + 0.35 * velocity : 0.3 + 0.7 * velocity) * note.level * Float(level)
+        let force = raw ? 1 : Float.random(in: 0.93...1.07)
+        gain = Float(layered ? 0.65 + 0.35 * velocity : 0.3 + 0.7 * velocity) * note.level * Float(level) * force
         // Softer notes are darker, as with a real pick or bow.
-        let cutoff = 2500 + 9000 * velocity
+        let cutoff = (2500 + 9000 * velocity) * (raw ? 1 : Double.random(in: 0.88...1.12))
         lpCoef = Float(1 - exp(-2 * Double.pi * cutoff / sampleRate))
         self.hold = hold.map { Int($0 * sampleRate) }
         self.string = string

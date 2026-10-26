@@ -30,6 +30,11 @@ final class Prefs: ObservableObject {
     @Published var makamID: String { didSet { d.set(makamID, forKey: "makam") } }
     /// Karar (tonic) pitch class for the makam tuner.
     @Published var makamRoot: Int { didSet { d.set(makamRoot, forKey: "makamRoot") } }
+    /// Performance pitches: per makam, cents added to each degree's theoretical (AEU) pitch.
+    @Published var makamOffsets: [String: [Double]] { didSet { d.set(makamOffsets, forKey: "makamOffsets") } }
+    /// The chromatic tuner's (and the piano's) temperament, and the key it is built on.
+    @Published var temperament: Temperament { didSet { d.set(temperament.rawValue, forKey: "temperament") } }
+    @Published var temperamentKey: Int { didSet { d.set(temperamentKey, forKey: "temperamentKey") } }
     @Published var a4: Double { didSet { d.set(a4, forKey: "a4") } }
     /// ± cents that count as "in tune".
     @Published var tolerance: Double { didSet { d.set(tolerance, forKey: "tolerance") } }
@@ -72,6 +77,13 @@ final class Prefs: ObservableObject {
     /// Backing band styles (BassStyle / KeysStyle raw values); "auto" follows the drums and rhythm.
     @Published var progressionBass: String { didSet { d.set(progressionBass, forKey: "progressionBass") } }
     @Published var progressionKeys: String { didSet { d.set(progressionKeys, forKey: "progressionKeys") } }
+    /// One bar of sticks before the loop starts.
+    @Published var progressionCountIn: Bool { didSet { d.set(progressionCountIn, forKey: "progressionCountIn") } }
+    /// Mixer: level per part ("instrument", "bass", "keys", "drums"), 0…1.5, and the parts switched off.
+    @Published var progressionLevels: [String: Double] { didSet { d.set(progressionLevels, forKey: "progressionLevels") } }
+    @Published var progressionMuted: Set<String> { didSet { d.set(Array(progressionMuted), forKey: "progressionMuted") } }
+    /// Solo guide: the scale and chord tones to improvise with, under the cards.
+    @Published var progressionGuide: Bool { didSet { d.set(progressionGuide, forKey: "progressionGuide") } }
 
     // MARK: Scales
     @Published var scaleID: String { didSet { d.set(scaleID, forKey: "scale") } }
@@ -108,6 +120,9 @@ final class Prefs: ObservableObject {
         tunerFunction = TunerFunction(rawValue: d.string(forKey: "tunerFunction") ?? "") ?? .single
         makamID = d.string(forKey: "makam") ?? "rast"
         makamRoot = d.object(forKey: "makamRoot") as? Int ?? 7
+        makamOffsets = d.dictionary(forKey: "makamOffsets") as? [String: [Double]] ?? [:]
+        temperament = Temperament(rawValue: d.string(forKey: "temperament") ?? "") ?? .equal
+        temperamentKey = d.integer(forKey: "temperamentKey")
         a4 = d.object(forKey: "a4") as? Double ?? 440
         tolerance = d.object(forKey: "tolerance") as? Double ?? 2
         notation = Notation(accidental: Accidental(rawValue: d.string(forKey: "accidental") ?? "") ?? .sharp,
@@ -135,6 +150,10 @@ final class Prefs: ObservableObject {
         progressionSwing = d.bool(forKey: "progressionSwing")
         progressionBass = d.string(forKey: "progressionBass") ?? "auto"
         progressionKeys = d.string(forKey: "progressionKeys") ?? "auto"
+        progressionCountIn = d.bool(forKey: "progressionCountIn")
+        progressionLevels = d.dictionary(forKey: "progressionLevels") as? [String: Double] ?? [:]
+        progressionMuted = Set(d.stringArray(forKey: "progressionMuted") ?? [])
+        progressionGuide = d.bool(forKey: "progressionGuide")
 
         scaleID = d.string(forKey: "scale") ?? "major"
         scaleRoot = d.integer(forKey: "scaleRoot")

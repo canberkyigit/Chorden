@@ -5,6 +5,15 @@ struct Tuning: Identifiable, Hashable, Codable {
     let name: String
     /// MIDI notes in the order the strings are drawn, left to right (thickest / top string first).
     let notes: [Int]
+    /// Per-string offsets in cents ("sweetened" tunings); nil = every string exactly on its note.
+    var cents: [Double]? = nil
+
+    /// The pitch each string is tuned to, offsets included (fractional MIDI).
+    var pitches: [Double] { notes.indices.map(pitch) }
+
+    func pitch(_ s: Int) -> Double { Double(notes[s]) + (cents.map { s < $0.count ? $0[s] : 0 } ?? 0) / 100 }
+
+    func offset(_ s: Int) -> Double { cents.map { s < $0.count ? $0[s] : 0 } ?? 0 }
 }
 
 struct Instrument: Identifiable {
@@ -42,14 +51,22 @@ enum Catalog {
 
     private static func inst(_ id: String, _ name: String, _ group: String, frets: Int = 22, chords: Bool = true,
                              pitchOrdered: Bool = true, span: Int = 3, drones: Set<Int> = [],
+                             sweetened: [(id: String, name: String, notes: String, cents: [Double])] = [],
                              _ tunings: [(String, String)]) -> Instrument {
         Instrument(id: id, name: name, group: group,
-                   tunings: tunings.enumerated().map { i, tn in t("\(id).\(i)", tn.0, tn.1) },
+                   tunings: tunings.enumerated().map { i, tn in t("\(id).\(i)", tn.0, tn.1) }
+                       + sweetened.map { sw in
+                           var tn = t("\(id).\(sw.id)", sw.name, sw.notes)
+                           tn.cents = sw.cents
+                           return tn
+                       },
                    frets: frets, hasChords: chords, pitchOrdered: pitchOrdered, span: span, drones: drones)
     }
 
     static let all: [Instrument] = [
-        inst("guitar6", "Guitar", "Guitar", [
+        // Buzz Feiten: the offsets published for guitars fitted with the Buzz Feiten Tuning System.
+        inst("guitar6", "Guitar", "Guitar",
+             sweetened: [(id: "bfts", name: "Buzz Feiten", notes: "E2 A2 D3 G3 B3 E4", cents: [-2, 0, -2, -3, -1, -2])], [
             ("Standard", "E2 A2 D3 G3 B3 E4"),
             ("Half Step Down (E♭)", "Eb2 Ab2 Db3 Gb3 Bb3 Eb4"),
             ("Whole Step Down (D)", "D2 G2 C3 F3 A3 D4"),

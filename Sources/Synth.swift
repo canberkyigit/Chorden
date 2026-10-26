@@ -269,10 +269,23 @@ final class Synth {
                                     hold: hold, string: nil, pan: part.pan, release: part.release, gain: part.gain)
             // A pianist's fingers land almost, not quite, together.
             t += Double.random(in: 0.002...0.007)
-            return BackingVoice(voice: voice, send: part.send)
+            return BackingVoice(voice: voice, send: part.send, part: part)
         }
         lock.withLockUnchecked { incomingTimed.append(Timed(at: at, backing: voices)) }
     }
+
+    /// Levels of the progression's parts (its mixer); 1 = as recorded. The main instrument covers everything
+    /// played on the chosen instrument.
+    struct Mix: Equatable {
+        var instrument: Float = 1
+        var bass: Float = 1
+        var keys: Float = 1
+        var drums: Float = 1
+    }
+    nonisolated(unsafe) private var mixTarget = Mix()
+    nonisolated(unsafe) private var mix = Mix()
+
+    func setMix(_ m: Mix) { lock.withLockUnchecked { mixTarget = m } }
 
     /// Lets go of the bass and keys (the loop stopped): no pad left hanging.
     func stopBacking() {
@@ -462,6 +475,7 @@ final class Synth {
                     self.lastBeat = (b, Date())
                     self.renderBeat = nil
                 }
+                self.mix = self.mixTarget
                 return self.toneTarget ?? 0
             }) {
                 self.tone.target = target
@@ -504,9 +518,11 @@ final class Synth {
                     r = 0
                     self.resetBus()
                 }
+                l *= self.mix.instrument
+                r *= self.mix.instrument
                 var roomIn = l + r
                 for v in self.backing.indices {
-                    let x = self.backing[v].voice.next()
+                    let x = self.backing[v].voice.next() * (self.backing[v].part == .bass ? self.mix.bass : self.mix.keys)
                     l += x * self.backing[v].voice.panL
                     r += x * self.backing[v].voice.panR
                     roomIn += x * self.backing[v].send
@@ -518,7 +534,7 @@ final class Synth {
                 for c in self.clicks.indices { center += self.clicks[c].next() }
                 var dl: Float = 0, dr: Float = 0
                 for d in self.drums.indices {
-                    let x = self.drums[d].next()
+                    let x = self.drums[d].next() * self.mix.drums
                     dl += x * self.drums[d].panL
                     dr += x * self.drums[d].panR
                 }
@@ -569,15 +585,19 @@ final class Synth {
 struct BackingVoice {
     var voice: SampleVoice
     let send: Float
+    let part: Synth.BackingPart
 }
 
 enum DrumKind {
-    case kick, snare, rim, hat, openHat, clap, shaker, ride, tom
+    /// `tom` is the low (floor) tom; fills run down from the high tom through the mid one.
+    case kick, snare, rim, hat, openHat, clap, shaker, ride, tom, tomMid, tomHigh, crash
 
     /// Name of its recording in Resources/Samples/drums.
     var file: String {
         switch self {
         case .openHat: "openhat"
+        case .tomMid: "tommid"
+        case .tomHigh: "tomhigh"
         default: "\(self)"
         }
     }
@@ -600,6 +620,9 @@ enum DrumKind {
         case .shaker: 0.15
         case .ride: -0.35
         case .tom: -0.25
+        case .tomMid: -0.1
+        case .tomHigh: 0.1
+        case .crash: 0.35
         }
     }
 }
@@ -626,7 +649,7 @@ final class DrumSamples {
             // Trailing zeros let the interpolator read past the end.
             return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength))) + [0, 0, 0]
         }
-        let kinds: [DrumKind] = [.kick, .snare, .rim, .hat, .openHat, .clap, .shaker, .ride, .tom]
+        let kinds: [DrumKind] = [.kick, .snare, .rim, .hat, .openHat, .clap, .shaker, .ride, .tom, .tomMid, .tomHigh, .crash]
         for k in kinds {
             hits[k.file] = read(k.file)
             if k.softBelow != nil { hits[k.file + "-soft"] = read(k.file + "-soft") }
@@ -693,7 +716,8 @@ struct DrumVoice {
         case .clap: (0.45, 0.22)
         case .shaker: (0.42, 0.07)
         case .ride: (0.3, 1.0)
-        case .tom: (0.7, 0.35)
+        case .tom, .tomMid, .tomHigh: (0.7, 0.35)
+        case .crash: (0.35, 1.6)
         }
         gain = g * velocity
         length = Int(sampleRate * len)
@@ -752,7 +776,7 @@ struct DrumVoice {
             let x = noise()
             hpY = 0.4 * (hpY + x - hpX); hpX = x
             v = hpY * min(1, t / 0.006) * exp(-t / 0.025)
-        case .ride:
+        case .ride, .crash:
             // Inharmonic partials of a cymbal bell, over a wash of noise.
             let partials = [3150.0, 4230.0, 5370.0, 6810.0, 8100.0]
             var metal = 0.0
@@ -760,8 +784,9 @@ struct DrumVoice {
             let x = noise()
             hpY = 0.5 * (hpY + x - hpX); hpX = x
             v = (metal * 0.12 + hpY * 0.5) * (0.65 * exp(-t / 0.07) + 0.35 * exp(-t / 0.6))
-        case .tom:
-            let f = 95 + 60 * exp(-t / 0.05)
+        case .tom, .tomMid, .tomHigh:
+            let base = kind == .tomHigh ? 150.0 : kind == .tomMid ? 120 : 95
+            let f = base + 60 * exp(-t / 0.05)
             phase += f / sr
             v = sin(2 * .pi * phase) * exp(-t / 0.25)
         }

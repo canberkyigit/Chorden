@@ -22,7 +22,7 @@ struct InstrumentPicker: View {
 
             switch mode {
             case .instrument where prefs.instrument.isKeyboard:
-                EmptyView()
+                if allowModes { temperamentMenu }
             case .instrument:
                 Dropdown {
                     Text(tr(prefs.tuning.name)).font(.system(size: size)).foregroundStyle(Theme.text)
@@ -41,11 +41,51 @@ struct InstrumentPicker: View {
                     Text(trf("Karar %@", prefs.notation.name(pc: prefs.makamRoot)))
                         .font(.system(size: size)).foregroundStyle(Theme.dim)
                 } content: { karar }
+                Dropdown(chevron: false) {
+                    Image(systemName: "slider.vertical.3")
+                        .font(.system(size: size - 2))
+                        .foregroundStyle(prefs.makamOffsets[prefs.makamID]?.contains { $0 != 0 } == true ? Theme.good : Theme.ghost)
+                } content: { MakamPitchEditor() }
+                .help(tr("Performance pitches: fine-tune each degree"))
             case .chromatic:
-                EmptyView()
+                temperamentMenu
             }
         }
         .padding(.leading, -8)
+    }
+
+    /// Equal temperament or a historical one, and the key it is built on.
+    private var temperamentMenu: some View {
+        Dropdown {
+            Text(prefs.temperament == .equal ? tr(prefs.temperament.name)
+                 : tr(prefs.temperament.name) + " · " + prefs.notation.name(pc: prefs.temperamentKey))
+                .font(.system(size: size)).foregroundStyle(prefs.temperament == .equal ? Theme.dim : Theme.text)
+        } content: {
+            VStack(alignment: .leading, spacing: 0) {
+                DropdownHeader(title: tr("Temperament"))
+                ForEach(Temperament.allCases, id: \.self) { t in
+                    DropdownItem(title: tr(t.name), detail: tr(t.detail), selected: prefs.temperament == t) { prefs.temperament = t }
+                }
+                DropdownHeader(title: tr("Built on"))
+                Grid(horizontalSpacing: 0, verticalSpacing: 2) {
+                    ForEach(0..<2, id: \.self) { row in
+                        GridRow {
+                            ForEach(0..<6, id: \.self) { col in
+                                let pc = row * 6 + col
+                                TextChoice(title: prefs.notation.name(pc: pc), selected: prefs.temperamentKey == pc, size: 11) {
+                                    prefs.temperamentKey = pc
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.leading, 18)
+                .padding(.bottom, 6)
+                .opacity(prefs.temperament == .equal ? 0.4 : 1)
+            }
+            .frame(minWidth: 300)
+        }
+        .help(tr("Temperament"))
     }
 
     var instruments: some View {
@@ -134,7 +174,8 @@ struct InstrumentPicker: View {
     }
 
     private func tuningItem(_ t: Tuning) -> some View {
-        DropdownItem(title: tr(t.name), detail: t.notes.map { prefs.notation.name(pc: $0) }.joined(separator: " "),
+        DropdownItem(title: tr(t.name), detail: t.notes.map { prefs.notation.name(pc: $0) }.joined(separator: " ")
+                        + (t.cents?.contains { $0 != 0 } == true ? "  ±¢" : ""),
                      selected: prefs.tuning.id == t.id,
                      starred: { prefs.favoriteTunings.contains(t.id) }, onStar: { prefs.toggleFavorite(t) }) {
             prefs.select(tuning: t, of: prefs.instrument)
@@ -177,6 +218,8 @@ struct TuningEditor: View {
     let instrument: Instrument
     @ObservedObject var prefs = Prefs.shared
     @State private var notes: [Int]
+    /// Per-string offsets in cents ("sweetened" tunings).
+    @State private var cents: [Double]
     @State private var name: String
     private let editing: Tuning?
 
@@ -185,6 +228,7 @@ struct TuningEditor: View {
         let custom = tuning.id.hasPrefix("custom.")
         editing = custom ? tuning : nil
         _notes = State(initialValue: tuning.notes)
+        _cents = State(initialValue: tuning.notes.indices.map(tuning.offset))
         _name = State(initialValue: custom ? tuning.name : "")
     }
 
@@ -201,9 +245,14 @@ struct TuningEditor: View {
                             .frame(width: 38, height: 22)
                             .background(Theme.line.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
                         step("chevron.down") { notes[i] = max(notes[i] - 1, 12) }
+                        CentsStepper(value: $cents[i])
                     }
                 }
             }
+            Text(tr("Cents per string: tune a string slightly sharp or flat on purpose (sweetened tunings)."))
+                .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                .frame(maxWidth: 340, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 TextField(tr("Name"), text: $name)
                     .textFieldStyle(.plain)
@@ -228,7 +277,9 @@ struct TuningEditor: View {
     private func save() {
         let fallback = notes.map { prefs.notation.name(pc: $0) }.joined()
         let title = name.trimmingCharacters(in: .whitespaces).isEmpty ? fallback : name
-        prefs.saveCustom(Tuning(id: editing?.id ?? "custom.\(UUID().uuidString)", name: title, notes: notes), for: instrument)
+        let sweet = cents.contains { $0 != 0 } ? cents : nil
+        prefs.saveCustom(Tuning(id: editing?.id ?? "custom.\(UUID().uuidString)", name: title, notes: notes, cents: sweet),
+                         for: instrument)
         Dropdowns.shared.closeAll()
     }
 
@@ -494,10 +545,18 @@ struct StringsRow: View {
                 (Scales.degreeLabel(Scales.scale(prefs.makamID), i, root: prefs.makamRoot, prefs.notation), trf("Degree %d", i + 1))
             }
         }
-        return prefs.tuning.notes.map { n in
-            (prefs.notation.name(pc: n),
-             "\(prefs.notation.name(midi: n)) · " + String(format: "%.2f Hz", Music.frequency(midi: Double(n), a4: prefs.a4)))
+        let tuning = prefs.tuning
+        return tuning.notes.indices.map { s in
+            let n = tuning.notes[s], off = tuning.offset(s)
+            return (prefs.notation.name(pc: n),
+                    "\(prefs.notation.name(midi: n))" + (off == 0 ? "" : " " + centsText(off)) + " · "
+                        + String(format: "%.2f Hz", Music.frequency(midi: tuning.pitch(s), a4: prefs.a4)))
         }
+    }
+
+    /// A sweetened string's offset, shown above it.
+    private func offset(_ i: Int) -> Double {
+        prefs.targetMode == .instrument ? prefs.tuning.offset(i) : 0
     }
 
     var body: some View {
@@ -524,6 +583,15 @@ struct StringsRow: View {
                     .overlay(alignment: .bottom) {
                         Circle().fill(Theme.good).frame(width: 4, height: 4)
                             .offset(y: 8).opacity(tuned ? 1 : 0)
+                    }
+                    .overlay(alignment: .top) {
+                        if offset(i) != 0 {
+                            Text(String(format: "%+.0f", offset(i)).replacingOccurrences(of: "-", with: "−"))
+                                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                                .foregroundStyle(Theme.dim)
+                                .fixedSize()
+                                .offset(y: -13)
+                        }
                     }
                     .contentShape(Circle())
                 }
@@ -806,6 +874,15 @@ struct TunerView: View {
             HStack {
                 InstrumentPicker()
                 Spacer()
+                Button { AppState.shared.stage = true } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.dim)
+                        .frame(width: 26, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(tr("Stage mode: the tuner full screen, big and easy to read"))
                 if prefs.targetMode == .instrument && !prefs.instrument.isKeyboard {
                     HStack(spacing: 2) {
                         TextChoice(title: tr("One string"), selected: function == .single, size: 11) { prefs.tunerFunction = .single }
@@ -946,4 +1023,149 @@ func makamSpelling(_ r: Reading) -> (natural: Int, accidental: String)? {
 
 extension TunerStatus {
     var isFailure: Bool { if case .failed = self { return true } else { return false } }
+}
+
+/// −/+ one cent, for sweetened strings and performance pitches.
+struct CentsStepper: View {
+    @Binding var value: Double
+    var range: ClosedRange<Double> = -50...50
+
+    var body: some View {
+        HStack(spacing: 0) {
+            button("minus") { value = max(range.lowerBound, value - 1) }
+            Text(value == 0 ? "0" : String(format: "%+.0f", value).replacingOccurrences(of: "-", with: "−"))
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(value == 0 ? Theme.ghost : Theme.text)
+                .frame(minWidth: 18)
+                .onTapGesture(count: 2) { value = 0 }
+            button("plus") { value = min(range.upperBound, value + 1) }
+        }
+        .help(tr("Cents · double-click to reset"))
+    }
+
+    private func button(_ icon: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: 7, weight: .bold))
+                .foregroundStyle(Theme.dim)
+                .frame(width: 11, height: 16)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Performance pitches for the makam tuner: each degree's theoretical (AEU) pitch, fine-tuned in cents to the
+/// way it is actually played. Kept per makam.
+struct MakamPitchEditor: View {
+    @ObservedObject var prefs = Prefs.shared
+
+    var body: some View {
+        let scale = Scales.scale(prefs.makamID)
+        let offsets = prefs.makamOffsets[prefs.makamID] ?? Array(repeating: 0, count: scale.degrees.count)
+        VStack(alignment: .leading, spacing: 10) {
+            Text(trf("%@ · performance pitches", scale.name)).font(.system(size: 12, weight: .semibold))
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+                GridRow {
+                    Text(tr("Degree")); Text(tr("Theory")); Text(tr("Adjust")); Text(tr("Played"))
+                }
+                .font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.ghost)
+                ForEach(scale.degrees.indices, id: \.self) { i in
+                    let theory = scale.degrees[i] * 100
+                    let off = i < offsets.count ? offsets[i] : 0
+                    GridRow {
+                        Text(Scales.degreeLabel(scale, i, root: prefs.makamRoot, prefs.notation))
+                            .font(.system(size: 12, weight: .medium))
+                        Text(String(format: "%.1f ¢", theory)).foregroundStyle(Theme.dim)
+                        CentsStepper(value: Binding(get: { off }, set: { set(i, $0, count: scale.degrees.count) }), range: -30...30)
+                        Text(String(format: "%.1f ¢ · %+.1f k", theory + off, off / Scales.koma)
+                            .replacingOccurrences(of: "-", with: "−"))
+                            .foregroundStyle(off == 0 ? Theme.ghost : Theme.text)
+                    }
+                    .font(.system(size: 11).monospacedDigit())
+                }
+            }
+            HStack {
+                Text(tr("Cents above the karar. Theory is Arel–Ezgi–Uzdilek; adjust to how your teacher or school plays it."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                TextChoice(title: tr("Reset"), selected: false, size: 11) { prefs.makamOffsets[prefs.makamID] = nil }
+            }
+        }
+        .padding(12)
+        .frame(width: 400)
+    }
+
+    private func set(_ i: Int, _ v: Double, count: Int) {
+        var o = prefs.makamOffsets[prefs.makamID] ?? Array(repeating: 0, count: count)
+        if o.count < count { o += Array(repeating: 0, count: count - o.count) }
+        o[i] = v
+        prefs.makamOffsets[prefs.makamID] = o.allSatisfy { $0 == 0 } ? nil : o
+    }
+}
+
+/// Stage mode: the tuner alone, full screen, readable from across a dark stage. The whole screen turns green
+/// when the note is in tune; the strings stay along the bottom so a string can still be locked.
+struct StageTunerView: View {
+    @ObservedObject var tuner = TunerModel.shared
+    @ObservedObject var prefs = Prefs.shared
+    @ObservedObject var app = AppState.shared
+    /// Whether stage mode made the window full screen (and should undo it on leaving).
+    @State private var madeFullScreen = false
+
+    var body: some View {
+        let r = tuner.reading
+        let tint = Theme.tint(cents: r.cents, tolerance: prefs.tolerance, active: r.hasSignal)
+        GeometryReader { geo in
+            let unit = min(geo.size.width, geo.size.height)
+            ZStack {
+                Color.black
+                (r.inTune && r.hasSignal ? Theme.good.opacity(0.28) : Color.clear)
+                    .animation(.easeOut(duration: 0.2), value: r.inTune)
+                VStack(spacing: unit * 0.03) {
+                    Spacer(minLength: 0)
+                    let makam = makamSpelling(r)
+                    NoteDisplay(midi: makam?.natural ?? r.target, color: r.hasSignal ? tint : Color.white.opacity(0.35),
+                                size: unit * 0.34, accidental: makam?.accidental)
+                    Text(r.target == nil ? " " : (r.inTune ? tr("In tune") : centsText(r.cents)))
+                        .font(.system(size: unit * 0.06, weight: .semibold).monospacedDigit())
+                        .foregroundStyle(r.hasSignal ? tint : Color.white.opacity(0.35))
+                    NeedleMeter(cents: r.cents, active: r.hasSignal, tolerance: prefs.tolerance, height: unit * 0.13)
+                        .frame(maxWidth: geo.size.width * 0.8)
+                    Spacer(minLength: 0)
+                    if prefs.targetMode != .chromatic { StringsRow(size: max(38, unit * 0.07)) }
+                }
+                .padding(.top, unit * 0.05)
+                .padding(.bottom, unit * 0.08)
+            }
+            .overlay(alignment: .topTrailing) {
+                Button(action: leave) {
+                    Label(tr("Leave stage mode"), systemImage: "xmark")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.75))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .padding(24)
+            }
+        }
+        .environment(\.colorScheme, .dark)
+        .ignoresSafeArea()
+        .onAppear {
+            guard let w = NSApp.mainWindow ?? NSApp.keyWindow, !w.styleMask.contains(.fullScreen) else { return }
+            madeFullScreen = true
+            w.toggleFullScreen(nil)
+        }
+    }
+
+    private func leave() {
+        if madeFullScreen, let w = NSApp.mainWindow ?? NSApp.keyWindow, w.styleMask.contains(.fullScreen) {
+            w.toggleFullScreen(nil)
+        }
+        app.stage = false
+    }
 }

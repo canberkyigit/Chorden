@@ -22,6 +22,8 @@ final class AppState: ObservableObject {
     @Published var searchRequest = 0
     /// Bumped by ⌘, to open the settings panel.
     @Published var settingsRequest = 0
+    /// The tuner fills the screen, big and high-contrast, for the stage.
+    @Published var stage = false
 }
 
 struct MainView: View {
@@ -30,6 +32,14 @@ struct MainView: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
+        if app.stage {
+            StageTunerView()
+        } else {
+            main
+        }
+    }
+
+    private var main: some View {
         VStack(spacing: 0) {
             ZStack {
                 // Narrow windows get a tighter row, so the tabs clear the window buttons and the icons.

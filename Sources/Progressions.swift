@@ -346,3 +346,27 @@ extension Progressions {
         return Array(unique.filter { $0.why != .borrowed }.prefix(7)) + borrowed
     }
 }
+
+// MARK: - Soloing
+
+extension Progressions {
+    /// Modes tried on a chord's root, most familiar first.
+    private static let soloModes = ["major", "mixolydian", "dorian", "minor", "lydian", "phrygian", "locrian",
+                                    "harmonic", "melodic", "phrygdom", "dimwh", "dimhw", "whole"]
+
+    /// What to improvise with over step `i`: the key's own scale while the chord belongs to it (harmonic minor
+    /// for minor keys' major V); otherwise the mode on the chord's root that holds every chord tone and shares the
+    /// most notes with the key.
+    static func soloScale(_ p: Progression, at i: Int) -> (root: Int, scale: Scale) {
+        let root = p.root(i)
+        let tones = Set(Chords.quality(p.steps[i].quality).intervals.map { (root + $0) % 12 })
+        func pcs(_ id: String, on r: Int) -> Set<Int> { Set(Scales.scale(id).degrees.map { (r + Int($0)) % 12 }) }
+        let keyScale = p.minor ? "minor" : "major"
+        let inKey = pcs(keyScale, on: p.key)
+        if tones.isSubset(of: inKey) { return (p.key, Scales.scale(keyScale)) }
+        if p.minor && tones.isSubset(of: pcs("harmonic", on: p.key)) { return (p.key, Scales.scale("harmonic")) }
+        let fitting = soloModes.filter { tones.isSubset(of: pcs($0, on: root)) }
+        let best = fitting.max { pcs($0, on: root).intersection(inKey).count < pcs($1, on: root).intersection(inKey).count }
+        return (root, Scales.scale(best ?? "major"))
+    }
+}

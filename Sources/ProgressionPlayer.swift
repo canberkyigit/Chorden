@@ -182,6 +182,35 @@ enum DrumPattern: String, CaseIterable {
     }
 }
 
+extension DrumPattern {
+    /// What a drummer plays into the top of the loop, over its last `beats` beats (1 or 2), as (offset from the
+    /// fill's start, drum, velocity). Nil where the groove carries on through (bossa, the click).
+    func fill(beats: Int) -> [(Double, DrumKind, Double)]? {
+        func run(_ kinds: [DrumKind], step: Double, from v0: Double, to v1: Double) -> [(Double, DrumKind, Double)] {
+            kinds.enumerated().map { i, k in
+                (Double(i) * step, k, v0 + (v1 - v0) * Double(i) / Double(max(1, kinds.count - 1)))
+            }
+        }
+        switch self {
+        case .off, .click, .bossa:
+            return nil
+        case .jazz, .shuffle:
+            // Snare triplets, swelling into the downbeat.
+            return run(Array(repeating: .snare, count: 3 * beats), step: 1.0 / 3, from: 0.35, to: 0.85)
+        case .ballad:
+            // A soft eighth-note roll around the toms.
+            return run(beats == 1 ? [.tomHigh, .tomMid] : [.tomHigh, .tomHigh, .tomMid, .tom], step: 0.5, from: 0.45, to: 0.7)
+        case .reggae:
+            return run(Array(repeating: .rim, count: 4 * beats), step: 0.25, from: 0.45, to: 0.85)
+        case .groove, .rock, .disco, .funk, .hiphop, .halftime:
+            // Sixteenths from the snare down the toms, with the kick under the last one.
+            let kinds: [DrumKind] = beats == 1 ? [.snare, .snare, .tomHigh, .tomMid]
+                : [.snare, .snare, .snare, .snare, .tomHigh, .tomHigh, .tomMid, .tom]
+            return run(kinds, step: 0.25, from: 0.6, to: 0.95) + [(Double(beats) - 0.25, .kick, 0.85)]
+        }
+    }
+}
+
 /// Plays the current progression in a loop with the chosen pattern, tempo and drums.
 /// Events are queued ~300 ms ahead on the synth's sample clock, so the groove never drifts.
 final class ProgressionPlayer: ObservableObject {
@@ -204,6 +233,8 @@ final class ProgressionPlayer: ObservableObject {
     /// carries on from the same chord instead of jumping.
     private var loopOrigin = 0.0
     private let band = BackingBand()
+    /// Played once: the final chord has been queued.
+    private var endingQueued = false
 
     var beatsPerChord: Int { prefs.progressionBeats }
     var totalBeats: Double { Double((progression?.steps.count ?? 0) * beatsPerChord) }
@@ -225,9 +256,12 @@ final class ProgressionPlayer: ObservableObject {
         anchorSample = synth.now + UInt64(synth.outputSampleRate * 0.15)
         anchorBeat = 0
         scheduledUntil = 0
-        loopOrigin = 0
+        // A count-in bar comes first: the progression starts after it.
+        loopOrigin = prefs.progressionCountIn ? 4 : 0
+        endingQueued = false
         band.reset()
         playing = true
+        applyMix()
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.025, repeats: true) { [weak self] _ in self?.tick() }
         tick()
@@ -241,6 +275,7 @@ final class ProgressionPlayer: ObservableObject {
         synth.cancelScheduled()
         synth.stopBacking()
         synth.keepAlive = false
+        synth.setMix(Synth.Mix())
         chord = nil
         beat = nil
     }
@@ -253,6 +288,19 @@ final class ProgressionPlayer: ObservableObject {
     }
 
     private var sampleRate: Double { synth.outputSampleRate }
+
+    // MARK: - Mixer
+
+    static let parts = ["instrument", "bass", "keys", "drums"]
+
+    func level(_ part: String) -> Double { prefs.progressionMuted.contains(part) ? 0 : prefs.progressionLevels[part] ?? 1 }
+
+    /// The mixer's levels take effect at once while the loop plays; outside it everything plays at full level.
+    func applyMix() {
+        guard playing else { return }
+        synth.setMix(Synth.Mix(instrument: Float(level("instrument")), bass: Float(level("bass")),
+                               keys: Float(level("keys")), drums: Float(level("drums"))))
+    }
 
     // MARK: - Band
 
@@ -361,14 +409,22 @@ final class ProgressionPlayer: ObservableObject {
         let horizon = beat(at: now) + 0.3 * anchorBPM / 60
         let total = totalBeats
         while scheduledUntil < horizon {
-            if !prefs.progressionLoop && scheduledUntil - loopOrigin >= total { break }
+            if !prefs.progressionLoop && scheduledUntil - loopOrigin >= total {
+                // Played once: end on the first chord, with a crash, and let it ring.
+                if !endingQueued { scheduleEnding(at: scheduledUntil, progression: p) }
+                break
+            }
             schedule(beat: scheduledUntil, progression: p)
             scheduledUntil += 1
         }
         // Playhead for the UI.
         let b = beat(at: now)
-        if b >= 0 {
-            if !prefs.progressionLoop && b - loopOrigin >= total + 1 { return stop() }
+        if b - loopOrigin < 0 {
+            // Counting in.
+            if chord != nil { chord = nil }
+            if beat != nil { beat = nil }
+        } else if b >= 0 {
+            if !prefs.progressionLoop && b - loopOrigin >= total + 3 { return stop() }
             let inLoop = Self.mod(b - loopOrigin, max(1, total))
             let c = min(p.steps.count - 1, Int(inLoop) / beatsPerChord)
             let bt = Int(inLoop) % beatsPerChord
@@ -379,6 +435,11 @@ final class ProgressionPlayer: ObservableObject {
 
     /// Queues every hit falling in beat [b, b + 1). Patterns are written per 4/4 bar.
     private func schedule(beat b: Double, progression p: Progression) {
+        if b < loopOrigin {
+            // The count-in: sticks on every beat, the first one louder.
+            synth.schedule(drum: .rim, at: sample(at: b), velocity: b == 0 ? 0.95 : 0.7)
+            return
+        }
         let bpc = Double(beatsPerChord)
         let loopBeat = Self.mod(b - loopOrigin, Double(p.steps.count) * bpc)
         let index = Int(loopBeat / bpc)
@@ -425,8 +486,25 @@ final class ProgressionPlayer: ObservableObject {
         if drums == .click {
             synth.schedule(drum: barPos == 0 ? .rim : .hat, at: sample(at: b), velocity: barPos == 0 ? 0.9 : 0.7)
         }
-        for (offset, kind, v) in drums.bar where offset >= barPos && offset < barPos + 1 {
-            synth.schedule(drum: kind, at: at(offset, barBeat: barPos), velocity: v)
+        // The drummer marks the loop: a crash on its first downbeat, a fill over its last beat (two beats every
+        // fourth time round). Short loops (under two bars) only get the crash the first time.
+        let total = totalBeats
+        let pass = Int((b - loopOrigin) / max(1, total))
+        let long = total >= 8
+        if drums != .off && drums != .click && loopBeat == 0 && (long || pass == 0) {
+            synth.schedule(drum: .crash, at: sample(at: b), velocity: 0.75)
+        }
+        let fillBeats = long && pass % 4 == 3 ? 2 : 1
+        let fill = long ? drums.fill(beats: fillBeats) : nil
+        let fillStart = total - Double(fillBeats)
+        if let fill, loopBeat >= fillStart {
+            for (offset, kind, v) in fill where offset >= loopBeat - fillStart && offset < loopBeat - fillStart + 1 {
+                synth.schedule(drum: kind, at: sample(at: b + offset - (loopBeat - fillStart)), velocity: v)
+            }
+        } else {
+            for (offset, kind, v) in drums.bar where offset >= barPos && offset < barPos + 1 {
+                synth.schedule(drum: kind, at: at(offset, barBeat: barPos), velocity: v)
+            }
         }
 
         // Bass and keys follow the drummer's feel: swung eighths with a jazz or shuffle groove, or with Swing on.
@@ -451,6 +529,28 @@ final class ProgressionPlayer: ObservableObject {
             for e in band.keys(styles.keys, context, bassPlaying: styles.bass != .off, high: prefs.instrument.isKeyboard) {
                 synth.schedule(.keys, notes: e.notes, at: time(e.beat), velocity: e.velocity, hold: e.length * secondsPerBeat)
             }
+        }
+    }
+
+    /// The last beat of a progression played once: its first chord again, struck and left to ring, with the bass
+    /// on the root and a crash.
+    private func scheduleEnding(at b: Double, progression p: Progression) {
+        endingQueued = true
+        let t = sample(at: b)
+        let secondsPerBeat = 60 / anchorBPM
+        synth.schedule(strum: chordNotes(root: p.root(0), quality: p.steps[0].quality), at: t, up: false, velocity: 0.9,
+                       hold: 3 * secondsPerBeat)
+        let drums = DrumPattern(rawValue: prefs.progressionDrums) ?? .off
+        if drums != .off && drums != .click {
+            synth.schedule(drum: .crash, at: t, velocity: 0.85)
+            synth.schedule(drum: .kick, at: t, velocity: 0.9)
+        }
+        let styles = bandStyles
+        let root = p.root(0)
+        if styles.bass != .off { synth.schedule(.bass, notes: [28 + (root + 8) % 12], at: t, velocity: 0.85, hold: 3 * secondsPerBeat) }
+        if styles.keys != .off {
+            synth.schedule(.keys, notes: PianoVoicing.playable(root: root, quality: Chords.quality(p.steps[0].quality)).dropFirst().map { $0 },
+                           at: t, velocity: 0.7, hold: 3 * secondsPerBeat)
         }
     }
 
